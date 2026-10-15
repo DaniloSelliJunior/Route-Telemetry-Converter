@@ -1,0 +1,2 @@
+Coloque aqui o logo da equipe como  logo.png  (fundo transparente, ~200 px de altura).
+Se o arquivo existir, o app o exibe no cabeçalho; senão mostra só o nome da equipe.
