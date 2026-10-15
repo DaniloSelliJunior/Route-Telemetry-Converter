@@ -14,8 +14,19 @@ The current version focuses on the foundational pipeline: extracting raw data an
 *   **MoTeC Log Generation:** Automatically converts the parsed binary data into native **MoTeC i2** compatible log files (`.ld` / `.ldx`).
 *   **Channel Mapping & Unit Conversion:** Maps raw sensor bytes to physical engineering units (e.g., RPM, wheel speeds, temperatures, suspension travel) for seamless integration into MoTeC workspaces.
 *   **Timestamp Alignment:** Ensures accurate time-series synchronization across all sensor channels during the conversion process.
+*   **Graphical User Interface (Flet GUI):** Intuitive desktop application built with Flet (Flutter for Python), enabling a seamless drag-and-drop workflow and real-time status tracking alongside the core CLI engine.
+*   **High-Speed Processing:** Highly optimized execution capable of converting **30 minutes** of continuous telemetry data (spanning 23 sensor variables across multiple frequencies) into MoTeC logs in **under 1 second**.
 
 ---
+
+### ⚡ Usage Demonstration & Performance Benchmark
+
+*The video below demonstrates the Flet-based desktop application in action. In this benchmark, the application ingests a raw binary dump representing **30 minutes of continuous vehicle telemetry**. The dataset comprises 23 distinct sensor variables multiplexed at different sampling frequencies (up to 200 Hz). The underlying parsing engine efficiently decodes the C-style struct payloads, aligns the time-series data, applies physical unit conversions, and compiles the final `.ld` MoTeC log file in **under 1 second**. This high-throughput capability paired with an intuitive GUI ensures rapid turnaround times for vehicle dynamics validation.*
+
+[Gravação de tela de 2026-10-11 01-15-31.webm](https://github.com/user-attachments/assets/bc5bcd5b-2622-453d-a20c-4ac4a636f097)
+
+---
+
 
 ## 🚀 Roadmap (Planned Features)
 
