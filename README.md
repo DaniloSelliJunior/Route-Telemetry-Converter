@@ -12,7 +12,7 @@ It is the first piece of a broader initiative to restructure the team's data ana
 - **MoTeC `.ld` export:** writes native logs that open in MoTeC i2, including driver, vehicle, venue, event and session metadata.
 - **23 named channels with units:** four packet groups (IMU, pedals/brakes, fast engine, slow engine/fluids). The firmware already logs engineering-unit floats, so values are **not rescaled**; the converter only names the channels and attaches units.
 - **Fixed-rate resampling:** the `.ld` format needs a fixed frequency per channel, so each packet group is resampled to its nominal rate (200 / 50 / 10 Hz) on a common time origin. Continuous channels use linear interpolation; discrete channels (gear) hold the last value, so a 2→3 shift never shows up as "gear 2.5".
-- **Timestamp rollover handling:** the `uint32` millisecond counter wrapping (~49 days) is unwrapped; repeated timestamps keep the last sample.
+- **Timestamp rollover handling:** the `uint32` millisecond counter wrapping (~49 days) is unwrapped, also when a packet group only starts after the wrap; out-of-order samples are placed at their own timestamp and repeated timestamps keep the last sample.
 - **Desktop GUI (Flet):** dark interface with a file picker, session metadata fields, progress bar and a result summary (packets, channels, log duration, conversion time, output path).
 - **Fast:** about **1–2 seconds** for 30 minutes of telemetry (see the benchmark below).
 
@@ -92,12 +92,37 @@ print(result.total_packets, result.warnings)
 
 ---
 
-## 🧪 Tests & Benchmark
+## 🧪 Testing
+
+The test suite uses **pytest**. Every `.bin` input is built in code with `struct.pack` (`tests/builders.py`), so no binary fixtures are committed.
 
 ```bash
-python test_parser.py        # parser, resampling, CSV helper and .ld write + read-back
-python gerar_bin.py          # generates a small log_teste.bin to try the GUI
+pip install -r requirements-dev.txt      # requirements.txt + pytest + pytest-cov
+pytest                                   # default run (slow tests excluded)
+pytest -m slow                           # performance regression only
+pytest -m ""                             # everything, including slow tests
+pytest --cov --cov-report=term-missing   # coverage report
+```
+
+What the suite covers:
+
+- **Packet contract:** packed sizes (29 / 21 / 24 / 33 B), little-endian struct formats and rates from the table above, 23 unique channel names, gear as the only hold channel, and `PacketDef` rejecting a format/channel count mismatch.
+- **Parser:** hand-written little-endian bytes, every payload field of each packet type, integer type limits, mixed-rate and event-driven interleaving, empty file, truncated last packet, trailing garbage, unknown IDs (with the byte offset in the warning) and the progress callback.
+- **Timestamps:** single and double `uint32` rollover, small backward steps and counter resets not mistaken for a wrap, a log crossing 2³² exporting the same CSV as the same log without it, and a packet group whose first packet only arrives after the wrap.
+- **Resampling:** grid size at 200 / 50 / 10 Hz on a common time origin, linear interpolation, gear held so a 2→3 shift never becomes 2.5, repeated and out-of-order timestamps, and empty or single-sample channels.
+- **Bad values:** `NaN` / `inf` do not crash the conversion and only affect the neighbouring grid points; groups absent from the log; logs with a single packet.
+- **Export:** CSV layout (one channel per row: name, unit, rate, samples) and values; `.ld` read back with the vendored `ldparser` (driver, vehicle, venue, event/session/comment, channel names, units, rates, sample counts and `float32` data).
+- **Regression:** golden fingerprints of the CSV and `.ld` channel data for logs without cross-group rollover.
+- **GUI helpers:** `fmt_size`, `fmt_duration` and `log_duration_s` from `app.py` (skipped if `flet` is not installed). The Flet interface itself is not tested.
+- **Performance (`slow`):** the 30-minute `bench_enduro.py` log (558,000 packets) must convert in under 15 s with full-length channels.
+
+Measured line coverage (default run, Python 3.13 on Linux): `parser.py`, `exporter.py` and `packets.py` at **100%** (99% with branch coverage), `app.py` at **19%** because only its pure helpers are tested. The vendored `motec_lib/` is excluded.
+
+### Benchmark
+
+```bash
 python bench_enduro.py 30    # synthetic benchmark; argument = minutes of log (default 30)
+python bench_enduro.py 1     # short 1-minute log to try the GUI (open bench_enduro.bin)
 ```
 
 `bench_enduro.py` creates `bench_enduro.bin` and `bench_enduro.ld` in the current folder; delete them afterwards.
@@ -130,11 +155,12 @@ Colors live in the `THEME` block at the top of `app.py`. To show the team logo i
 ├── exporter.py        # .ld export (fast channel writer) and CSV helper
 ├── motec_lib/         # vendored MoTeC .ld writer (see Credits)
 ├── assets/            # logo and static files
-├── test_parser.py     # tests
-├── gerar_bin.py       # small sample log generator
-├── bench_enduro.py    # synthetic benchmark
+├── tests/             # pytest suite (synthetic logs built in code)
+├── bench_enduro.py    # synthetic log generator and benchmark
 ├── build.bat          # Windows executable build
-└── requirements.txt
+├── pyproject.toml     # pytest and coverage configuration
+├── requirements.txt
+└── requirements-dev.txt
 ```
 
 ---
@@ -168,6 +194,7 @@ The project is being expanded from a converter into a data analysis and vehicle 
 
 - **Language:** Python 3.10+
 - **Libraries:** `struct` (binary unpacking), `numpy` (resampling and export), `flet` (GUI)
+- **Testing:** `pytest`, `pytest-cov`
 - **Planned:** `pandas` (CSV and KPIs)
 - **Target software:** MoTeC i2 Standard / Pro
 
