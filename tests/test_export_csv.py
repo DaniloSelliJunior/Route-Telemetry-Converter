@@ -7,7 +7,7 @@ import pytest
 from builders import PERIOD_MS, packet, payload
 from exporter import write_csv
 from packets import PACKETS
-from parser import parse_bin
+from parser import ParseResult, parse_bin
 
 ALL_CHANNELS = [(pid, k, ch) for pid, d in PACKETS.items() for k, ch in enumerate(d.channels)]
 
@@ -48,3 +48,10 @@ def test_values_are_written_with_six_significant_digits(tmp_path):
     write_csv(parse_bin(packet(0x04, 0, 1234.5678, 1 / 3, 0, 0, 0, 0, 0)), path)
     temp_motor, temp_iat = list(csv.reader(path.open()))[:2]
     assert (temp_motor[3], temp_iat[3]) == ("1234.57", "0.333333")
+
+
+@pytest.mark.xfail(strict=True, reason="Bug C: write_csv quebra com 'min() iterable "
+                                       "argument is empty' em vez de uma mensagem clara")
+def test_empty_result_raises_same_clear_error_as_ld(tmp_path):
+    with pytest.raises(ValueError, match="Nenhum dado válido"):
+        write_csv(ParseResult(groups={}), tmp_path / "x.csv")
