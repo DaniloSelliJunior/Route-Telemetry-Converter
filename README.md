@@ -1,5 +1,7 @@
 # 🏎️ Formula Route Telemetry Converter
 
+[![tests](https://github.com/DaniloSelliJunior/Route-Telemetry-Converter/actions/workflows/tests.yml/badge.svg)](https://github.com/DaniloSelliJunior/Route-Telemetry-Converter/actions/workflows/tests.yml)
+
 Desktop tool that converts the raw binary logs (`.bin`) recorded by the ESP32 datalogger of the **[Formula Route UFSCar](https://www.formula.ufscar.br/)** Formula SAE team into **MoTeC i2** log files (`.ld`).
 
 It is the first piece of a broader initiative to restructure the team's data analysis tools. The goal is to deliver reliable, high-quality data that helps other engineering subsystems evaluate and validate vehicle dynamics during both the design and testing phases.
@@ -115,6 +117,8 @@ What the suite covers:
 - **Regression:** golden fingerprints of the CSV and `.ld` channel data for logs without cross-group rollover.
 - **GUI helpers:** `fmt_size`, `fmt_duration` and `log_duration_s` from `app.py` (skipped if `flet` is not installed). The Flet interface itself is not tested.
 - **Performance (`slow`):** the 30-minute `bench_enduro.py` log (558,000 packets) must convert in under 15 s with full-length channels.
+
+The same default run executes on GitHub Actions (Python 3.11, Ubuntu) for every push and pull request to `main` (`.github/workflows/tests.yml`).
 
 Measured line coverage (default run, Python 3.13 on Linux): `parser.py`, `exporter.py` and `packets.py` at **100%** (99% with branch coverage), `app.py` at **19%** because only its pure helpers are tested. The vendored `motec_lib/` is excluded.
 
