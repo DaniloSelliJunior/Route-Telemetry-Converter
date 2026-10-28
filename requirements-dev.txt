@@ -1,0 +1,5 @@
+# Dependências de desenvolvimento/testes. O requirements.txt (usado pelo
+# build.bat / PyInstaller) continua só com o que o executável precisa.
+-r requirements.txt
+pytest>=8.0
+pytest-cov>=5.0

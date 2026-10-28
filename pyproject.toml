@@ -1,0 +1,17 @@
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# raiz do projeto (parser, exporter, packets, app) e tests/ (builders) no sys.path
+pythonpath = [".", "tests"]
+addopts = "-ra --strict-markers -m 'not slow'"
+markers = [
+    "slow: testes de desempenho com log sintético longo (rodar com -m slow)",
+]
+xfail_strict = true
+
+[tool.coverage.run]
+source = ["."]
+omit = ["tests/*", "motec_lib/*", "bench_enduro.py"]
+
+[tool.coverage.report]
+show_missing = true
