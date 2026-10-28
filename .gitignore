@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# PyInstaller / flet pack
+build/
+dist/
+*.spec
+
+# Test and coverage output
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Benchmark output (bench_enduro.py)
+bench_enduro.bin
+bench_enduro.ld
