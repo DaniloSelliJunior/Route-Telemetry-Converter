@@ -47,3 +47,17 @@ def synthetic_log(duration_ms: int, start_ms: int = 0) -> bytes:
 
 def ramp(n: int, start: float = 0.0, step: float = 1.0) -> list:
     return [start + i * step for i in range(n)]
+
+
+def staggered_log() -> bytes:
+    """Grupos começando em instantes diferentes, pedais event-driven (sem rollover)."""
+    buf = bytearray()
+    for t in range(1000, 3000, 5):
+        buf += packet(0x01, t, *payload(0x01, t))
+        if t >= 1500 and t % 100 == 0:
+            buf += packet(0x04, t, *payload(0x04, t))
+        if t % 20 == 0:
+            buf += packet(0x03, t, *payload(0x03, t))
+        if t in (1210, 1215, 1600, 2333, 2990):              # eventos irregulares
+            buf += packet(0x02, t, *payload(0x02, t))
+    return bytes(buf)
