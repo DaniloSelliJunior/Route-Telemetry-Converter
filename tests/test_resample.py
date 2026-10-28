@@ -116,3 +116,25 @@ def test_groups_share_time_origin_of_earliest_packet(tmp_path):
     lengths = {r[0]: len(r) - 3 for r in csv.reader(path.open())}
     # t = 0 é 1000 ms para os dois grupos: 0..1995 ms a 200 Hz, 0..1900 ms a 10 Hz
     assert (lengths["Acel_X"], lengths["Temp_Motor"]) == (400, 20)
+
+
+# --- timestamps fora de ordem (Bug B) ---------------------------------------
+# np.interp e np.searchsorted exigem tempo crescente; sem ordenar, o resultado é
+# silenciosamente errado (o pico em t=20 ms some).
+
+OUT_OF_ORDER_XFAIL = pytest.mark.xfail(
+    strict=True, reason="Bug B: resample_uniform não ordena timestamps fora de ordem")
+
+
+@OUT_OF_ORDER_XFAIL
+@BOTH_MODES
+def test_out_of_order_samples_are_placed_at_their_timestamps(hold):
+    out = resample_uniform([0, 20, 10, 30], [0.0, 100.0, 0.0, 0.0], 100, 0, hold=hold)
+    assert out.tolist() == [0.0, 0.0, 100.0, 0.0]
+
+
+@OUT_OF_ORDER_XFAIL
+@BOTH_MODES
+def test_non_adjacent_repeated_timestamp_keeps_last_sample_in_file_order(hold):
+    out = resample_uniform([0, 10, 0, 20], [0.0, 1.0, 99.0, 2.0], 100, 0, hold=hold)
+    assert out.tolist() == [99.0, 1.0, 2.0]
