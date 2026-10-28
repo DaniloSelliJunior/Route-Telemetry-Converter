@@ -1,6 +1,6 @@
 """Bug A: rollover do uint32 entre grupos (um grupo começa antes de 2**32, outro depois).
 
-Os timestamps eram desenrolados grupo a grupo; um grupo cujo primeiro pacote chega
+Os timestamps eram desenrolados só grupo a grupo; um grupo cujo primeiro pacote chega
 depois do estouro ficava ~49,7 dias "antes" dos outros, e a grade comum passava a
 ter ~860 milhões de amostras por canal (~7 GB).
 """
@@ -43,8 +43,6 @@ def slow_group_starts_after_wrap() -> bytes:
     return bytes(buf)
 
 
-@pytest.mark.xfail(strict=True, reason="Bug A: unwrap por grupo desalinha grupos "
-                                       "que começam depois do rollover")
 def test_group_starting_after_rollover_shares_origin_with_others(tmp_path, no_huge_grids):
     path = tmp_path / "x.csv"
     write_csv(parse_bin(slow_group_starts_after_wrap()), path)

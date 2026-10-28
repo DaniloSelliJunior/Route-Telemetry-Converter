@@ -30,6 +30,11 @@ def _build_channels(result: ParseResult):
     """
     all_ts = {pid: unwrap_timestamps(g.timestamps_ms)
               for pid, g in result.groups.items()}
+    # grupo cujo 1º pacote veio depois de um rollover fica 2**32 "atrás" dos outros
+    latest = max(int(ts[0]) for ts in all_ts.values())
+    for ts in all_ts.values():
+        while latest - ts[0] > 2**31:
+            ts += 2**32
     t0 = min(int(ts[0]) for ts in all_ts.values())
     channels = []
     for pid, group in result.groups.items():
