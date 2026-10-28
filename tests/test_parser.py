@@ -108,14 +108,14 @@ def test_trailing_garbage_is_reported_with_ignored_byte_count(trailing):
 
 # --- ID desconhecido ----------------------------------------------------------
 
-@pytest.mark.parametrize("position", [0, 3, 10])
+@pytest.mark.parametrize("position", [0, 1, 3, 10])
 def test_unknown_id_stops_parsing_at_that_packet(position):
     good = imu_stream(10)
     data = good[:position * 29] + b"\xfe" + good[position * 29:]
     assert parse_bin(data).total_packets == position
 
 
-@pytest.mark.parametrize("position", [0, 3, 10])
+@pytest.mark.parametrize("position", [0, 1, 3, 10])
 def test_unknown_id_warning_names_id_and_offset(position):
     good = imu_stream(10)
     data = good[:position * 29] + b"\xfe" + good[position * 29:]
