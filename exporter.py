@@ -47,6 +47,8 @@ def _build_channels(result: ParseResult):
 
 def write_csv(result: ParseResult, path: str):
     """CSV de apoio/depuração: um canal por linha (cada um na sua frequência)."""
+    if not result.groups:
+        raise ValueError("Nenhum dado válido encontrado no arquivo.")
     channels = _build_channels(result)
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)

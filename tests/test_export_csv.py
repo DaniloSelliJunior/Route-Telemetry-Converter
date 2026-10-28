@@ -50,8 +50,6 @@ def test_values_are_written_with_six_significant_digits(tmp_path):
     assert (temp_motor[3], temp_iat[3]) == ("1234.57", "0.333333")
 
 
-@pytest.mark.xfail(strict=True, reason="Bug C: write_csv quebra com 'min() iterable "
-                                       "argument is empty' em vez de uma mensagem clara")
 def test_empty_result_raises_same_clear_error_as_ld(tmp_path):
     with pytest.raises(ValueError, match="Nenhum dado válido"):
         write_csv(ParseResult(groups={}), tmp_path / "x.csv")
