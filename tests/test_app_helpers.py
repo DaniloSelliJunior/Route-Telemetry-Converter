@@ -40,8 +40,6 @@ def test_log_duration_of_empty_log_is_zero():
     assert log_duration_s(parse_bin(b"")) == 0.0
 
 
-@pytest.mark.xfail(strict=True, reason="Bug D: log_duration_s usa timestamps crus e "
-                                       "mostra duração negativa após rollover")
 def test_log_duration_across_rollover_counts_time_past_2_32():
     # 2 s de log começando 1 s antes do estouro do contador
     assert log_duration_s(parse_bin(synthetic_log(2000, start_ms=U32 - 1000))) == 1.995
