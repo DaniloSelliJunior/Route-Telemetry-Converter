@@ -15,7 +15,7 @@ import time
 import flet as ft
 
 from exporter import write_ld
-from parser import parse_file
+from parser import parse_file, unwrap_timestamps
 
 # ----------------------------------------------------------------------------
 # PALETA (valores provisórios: troque pelos hex oficiais da equipe)
@@ -71,8 +71,8 @@ def open_folder(path: str):
 
 def log_duration_s(result) -> float:
     """Duração do log (maior intervalo entre os grupos de pacotes)."""
-    spans = [(g.timestamps_ms[-1] - g.timestamps_ms[0]) / 1000.0
-             for g in result.groups.values() if len(g.timestamps_ms) > 1]
+    unwrapped = (unwrap_timestamps(g.timestamps_ms) for g in result.groups.values())
+    spans = [(ts[-1] - ts[0]) / 1000.0 for ts in unwrapped if len(ts) > 1]
     return max(spans) if spans else 0.0
 
 

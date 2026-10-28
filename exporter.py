@@ -30,6 +30,11 @@ def _build_channels(result: ParseResult):
     """
     all_ts = {pid: unwrap_timestamps(g.timestamps_ms)
               for pid, g in result.groups.items()}
+    # grupo cujo 1º pacote veio depois de um rollover fica 2**32 "atrás" dos outros
+    latest = max(int(ts[0]) for ts in all_ts.values())
+    for ts in all_ts.values():
+        while latest - ts[0] > 2**31:
+            ts += 2**32
     t0 = min(int(ts[0]) for ts in all_ts.values())
     channels = []
     for pid, group in result.groups.items():
@@ -42,6 +47,8 @@ def _build_channels(result: ParseResult):
 
 def write_csv(result: ParseResult, path: str):
     """CSV de apoio/depuração: um canal por linha (cada um na sua frequência)."""
+    if not result.groups:
+        raise ValueError("Nenhum dado válido encontrado no arquivo.")
     channels = _build_channels(result)
     with open(path, "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)

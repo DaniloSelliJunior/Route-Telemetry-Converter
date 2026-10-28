@@ -109,6 +109,9 @@ def resample_uniform(ts_ms, values, freq_hz: float, t0_ms: float,
     if ts.size == 0:
         return np.empty(0)
     if ts.size > 1:
+        # np.interp/searchsorted exigem tempo crescente; estável = empate mantém ordem do arquivo
+        order = np.argsort(ts, kind="stable")
+        ts, vals = ts[order], vals[order]
         # timestamps repetidos (mesmo ms): fica a última amostra de cada instante
         keep = np.append(ts[1:] != ts[:-1], True)
         ts, vals = ts[keep], vals[keep]
