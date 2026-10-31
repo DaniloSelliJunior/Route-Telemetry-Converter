@@ -4,7 +4,7 @@ import pytest
 
 pytest.importorskip("flet")                       # app.py importa flet no topo
 
-from app import fmt_duration, fmt_size, log_duration_s   # noqa: E402
+from app import fmt_duration, fmt_size, log_duration_s, quality_lines, rates_summary  # noqa: E402
 from builders import U32, packet, synthetic_log, zeros   # noqa: E402
 from parser import parse_bin                              # noqa: E402
 
@@ -43,3 +43,22 @@ def test_log_duration_of_empty_log_is_zero():
 def test_log_duration_across_rollover_counts_time_past_2_32():
     # 2 s de log começando 1 s antes do estouro do contador
     assert log_duration_s(parse_bin(synthetic_log(2000, start_ms=U32 - 1000))) == 1.995
+
+
+def test_quality_lines_are_capped_with_remaining_count():
+    rep = {"avisos": [f"a{i}" for i in range(5)]}
+    assert quality_lines(rep, limit=3) == ["a0", "a1", "a2", "... e mais 2 aviso(s)."]
+    assert quality_lines({"avisos": []}) == []
+
+
+def test_rates_summary_shows_real_and_nominal_rate_per_group():
+    from quality import build_quality_report
+    rep = build_quality_report(parse_bin(synthetic_log(2000)))
+    assert rates_summary(rep) == ("Chassi_IMU: 200 / 200 Hz  ·  Pedais_Freios: 50 / 50 Hz  ·  "
+                                  "Motor_Rapido: 50 / 50 Hz  ·  Motor_Lento: 10 / 10 Hz")
+
+
+def test_rates_summary_with_single_packet_group():
+    from quality import build_quality_report
+    rep = build_quality_report(parse_bin(packet(0x04, 0, *zeros(0x04))))
+    assert rates_summary(rep) == "Motor_Lento: - / 10 Hz"

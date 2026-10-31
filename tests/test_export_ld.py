@@ -96,3 +96,68 @@ def test_progress_callback_ends_at_one(tmp_path, normal_log):
     calls = []
     write_ld(normal_log, str(tmp_path / "x.ld"), progress_cb=calls.append)
     assert calls == [0.5, 0.8, 1.0]
+
+
+# --- data do cabeçalho -------------------------------------------------------
+
+def test_header_date_is_bin_modification_time(tmp_path, normal_log_bytes):
+    import datetime
+    import os
+    from parser import parse_file
+    src = tmp_path / "log.bin"
+    src.write_bytes(normal_log_bytes)
+    when = datetime.datetime(2025, 3, 14, 15, 9, 26)
+    os.utime(src, (when.timestamp(), when.timestamp()))
+    path = str(tmp_path / "log.ld")
+    write_ld(parse_file(str(src)), path)
+    head, _ = read_ldfile(path)
+    assert head.datetime == when
+
+
+def test_explicit_log_datetime_wins_over_bin_mtime(tmp_path, normal_log):
+    import datetime
+    normal_log.source_mtime = 0.0
+    when = datetime.datetime(2026, 1, 2, 3, 4, 5)
+    path = str(tmp_path / "log.ld")
+    write_ld(normal_log, path, log_datetime=when)
+    assert read_ldfile(path)[0].datetime == when
+
+
+# --- erro e escrita atômica --------------------------------------------------
+
+def test_empty_result_error_includes_parser_warnings(tmp_path):
+    from parser import parse_bin
+    r = parse_bin(b"\xfe" * 10)
+    with pytest.raises(ValueError, match=r"Nenhum dado válido.*ID desconhecido 0xFE no offset 0"):
+        write_ld(r, str(tmp_path / "x.ld"))
+
+
+def test_failed_write_keeps_previous_file_and_leaves_no_temp(tmp_path, normal_log, monkeypatch):
+    import motec_log
+    path = tmp_path / "log.ld"
+    path.write_bytes(b"anterior")
+
+    def broken_write(self, filename):
+        with open(filename, "wb") as f:
+            f.write(b"pela metade")
+        raise OSError("disco cheio")
+
+    monkeypatch.setattr(motec_log.MotecLog, "write", broken_write)
+    with pytest.raises(OSError, match="disco cheio"):
+        write_ld(normal_log, str(path))
+    assert path.read_bytes() == b"anterior"
+    assert [p.name for p in tmp_path.iterdir()] == ["log.ld"]
+
+
+def test_successful_write_replaces_existing_file(tmp_path, normal_log):
+    path = tmp_path / "log.ld"
+    path.write_bytes(b"anterior")
+    write_ld(normal_log, str(path))
+    assert read_ldfile(str(path))[1][0].name == "Acel_X"
+    assert [p.name for p in tmp_path.iterdir()] == ["log.ld"]
+
+
+@pytest.mark.parametrize("n, names", [(1, ["a.ld"]), (2, ["a_seg1.ld", "a_seg2.ld"])])
+def test_segment_paths(n, names):
+    from exporter import segment_paths
+    assert segment_paths("a.ld", n) == names

@@ -6,8 +6,9 @@ Cada pacote no .bin tem o layout:
     N bytes : payload (definido por `payload_fmt`)
 
 Para adicionar um pacote novo, basta incluir um PacketDef em PACKETS.
-O parser NÃO consegue pular pacotes de ID desconhecido (não há campo de
-tamanho no stream), então todo ID presente no .bin precisa estar aqui.
+Não há campo de tamanho no stream: um ID que não esteja aqui é tratado como
+dado corrompido (o parser ressincroniza no próximo pacote válido e descarta
+os bytes), então todo ID gravado pelo firmware precisa estar aqui.
 """
 
 from dataclasses import dataclass
@@ -16,9 +17,10 @@ import struct
 
 @dataclass(frozen=True)
 class Channel:
+    # Sem "casas decimais": o ldparser vendorizado não trata dec != 0 (o upstream
+    # fixa 0) e o valor completo já vai como float32; o i2 ajusta a exibição.
     name: str
     unit: str = ""
-    decimals: int = 3
     hold: bool = False      # True = mantém o último valor (canais discretos, ex.: marcha)
 
 
@@ -72,10 +74,10 @@ PACKETS = {
         freq_hz=50.0,
         payload_fmt="4f",
         channels=(
-            Channel("Hall_Acelerador", "%", 1),
-            Channel("Hall_Freio", "%", 1),
-            Channel("Pressao_Freio_Diant", "PSI", 1),
-            Channel("Pressao_Freio_Tras", "PSI", 1),
+            Channel("Hall_Acelerador", "%"),
+            Channel("Hall_Freio", "%"),
+            Channel("Pressao_Freio_Diant", "PSI"),
+            Channel("Pressao_Freio_Tras", "PSI"),
         ),
     ),
 
@@ -86,12 +88,12 @@ PACKETS = {
         freq_hz=50.0,
         payload_fmt="Hb4f",
         channels=(
-            Channel("RPM", "rpm", 0),
-            Channel("Marcha", "", 0, hold=True),
-            Channel("TPS", "%", 1),
-            Channel("MAP", "kPa", 1),
-            Channel("Angulo_Ignicao", "deg", 1),
-            Channel("Velocidade", "km/h", 1),
+            Channel("RPM", "rpm"),
+            Channel("Marcha", "", hold=True),
+            Channel("TPS", "%"),
+            Channel("MAP", "kPa"),
+            Channel("Angulo_Ignicao", "deg"),
+            Channel("Velocidade", "km/h"),
         ),
     ),
 
@@ -102,13 +104,13 @@ PACKETS = {
         freq_hz=10.0,
         payload_fmt="7f",
         channels=(
-            Channel("Temp_Motor", "C", 1),
-            Channel("Temp_Ar_IAT", "C", 1),
-            Channel("Pressao_Oleo", "bar", 2),
-            Channel("Pressao_Combustivel", "bar", 2),
-            Channel("Tensao_Bateria", "V", 2),
-            Channel("Lambda_1", "", 3),
-            Channel("Nivel_Combustivel", "L", 2),
+            Channel("Temp_Motor", "C"),
+            Channel("Temp_Ar_IAT", "C"),
+            Channel("Pressao_Oleo", "bar"),
+            Channel("Pressao_Combustivel", "bar"),
+            Channel("Tensao_Bateria", "V"),
+            Channel("Lambda_1", ""),
+            Channel("Nivel_Combustivel", "L"),
         ),
     ),
 }

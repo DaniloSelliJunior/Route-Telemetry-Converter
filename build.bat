@@ -1,6 +1,6 @@
 @echo off
 REM Gera RouteTelemetryConverter.exe (pasta dist\)
-pip install -r requirements.txt
+pip install -r requirements-build.txt
 flet pack app.py --name RouteTelemetryConverter ^
   --add-data "motec_lib;motec_lib" ^
   --add-data "assets;assets" ^

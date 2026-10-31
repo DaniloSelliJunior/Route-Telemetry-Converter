@@ -53,3 +53,29 @@ def test_values_are_written_with_six_significant_digits(tmp_path):
 def test_empty_result_raises_same_clear_error_as_ld(tmp_path):
     with pytest.raises(ValueError, match="Nenhum dado válido"):
         write_csv(ParseResult(groups={}), tmp_path / "x.csv")
+
+
+def test_failed_csv_write_keeps_previous_file_and_leaves_no_temp(tmp_path, normal_log, monkeypatch):
+    import exporter
+    path = tmp_path / "log.csv"
+    path.write_text("anterior")
+
+    class Boom:
+        def __init__(self, f):
+            self.f = f
+
+        def writerow(self, row):
+            self.f.write("meia linha")
+            raise OSError("disco cheio")
+
+    monkeypatch.setattr(exporter.csv, "writer", Boom)
+    with pytest.raises(OSError):
+        write_csv(normal_log, path)
+    assert path.read_text() == "anterior"
+    assert [p.name for p in tmp_path.iterdir()] == ["log.csv"]
+
+
+def test_empty_result_error_includes_parser_warnings(tmp_path):
+    r = ParseResult(groups={}, warnings=["ID desconhecido 0x07 no offset 0; ..."])
+    with pytest.raises(ValueError, match="Avisos do parser: ID desconhecido 0x07 no offset 0"):
+        write_csv(r, tmp_path / "x.csv")

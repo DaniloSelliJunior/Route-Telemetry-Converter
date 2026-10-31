@@ -1,5 +1,5 @@
-# Dependências de desenvolvimento/testes. O requirements.txt (usado pelo
-# build.bat / PyInstaller) continua só com o que o executável precisa.
+# Dependências de desenvolvimento/testes. O requirements.txt continua só com o
+# que o app precisa; o PyInstaller fica em requirements-build.txt (build.bat).
 -r requirements.txt
 pytest>=8.0
 pytest-cov>=5.0

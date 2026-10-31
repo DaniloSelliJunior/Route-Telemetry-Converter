@@ -14,8 +14,9 @@ import time
 
 import flet as ft
 
-from exporter import write_ld
-from parser import parse_file, unwrap_timestamps
+from exporter import require_data, segment_paths, write_ld
+from parser import check_timestamps, parse_file, unwrap_timestamps
+from quality import build_quality_report
 
 # ----------------------------------------------------------------------------
 # PALETA (valores provisórios: troque pelos hex oficiais da equipe)
@@ -67,6 +68,24 @@ def open_folder(path: str):
             subprocess.Popen(["xdg-open", folder])
     except Exception:
         pass
+
+
+def quality_lines(report: dict, limit: int = 30) -> list:
+    """Avisos do relatório de qualidade para exibir (no máximo `limit`)."""
+    avisos = report["avisos"]
+    lines = list(avisos[:limit])
+    if len(avisos) > limit:
+        lines.append(f"... e mais {len(avisos) - limit} aviso(s).")
+    return lines
+
+
+def rates_summary(report: dict) -> str:
+    """Uma linha com a taxa real (mediana) x nominal de cada grupo."""
+    parts = []
+    for name, g in report["grupos"].items():
+        real = "-" if g["taxa_mediana_hz"] is None else f"{g['taxa_mediana_hz']:g}"
+        parts.append(f"{name}: {real} / {g['taxa_nominal_hz']:g} Hz")
+    return "  ·  ".join(parts)
 
 
 def log_duration_s(result) -> float:
@@ -267,6 +286,23 @@ def main(page: ft.Page):
             out_path, warn_text, ft.Row(controls=[open_btn]),
         ]),
     )
+    # ---- qualidade do log -------------------------------------------------
+    quality_icon = ft.Icon(ft.Icons.VERIFIED_ROUNDED, color=THEME["ok"], size=22)
+    quality_title = ft.Text("", size=15, weight=ft.FontWeight.W_600, color=THEME["text"])
+    quality_list = ft.Column(spacing=4)
+    quality_rates = ft.Text("", size=12, color=THEME["muted"], selectable=True)
+    quality_imu = ft.Text("", size=12, color=THEME["muted"], selectable=True)
+    quality_card = ft.Container(
+        visible=False,
+        bgcolor=THEME["surface"],
+        border=ft.border.all(1, THEME["ok"]),
+        border_radius=16, padding=20,
+        content=ft.Column(spacing=10, controls=[
+            ft.Row(spacing=8, controls=[quality_icon, quality_title]),
+            quality_list, quality_rates, quality_imu,
+        ]),
+    )
+
     error_text = ft.Text("", size=13, color=THEME["err"], selectable=True)
     error_card = ft.Container(
         visible=False, bgcolor=THEME["surface"],
@@ -305,6 +341,7 @@ def main(page: ft.Page):
         drop_zone.border = ft.border.all(1.5, THEME["ok"])
         result_card.visible = False
         error_card.visible = False
+        quality_card.visible = False
         set_convert_enabled(True)
         stage.value = "Pronto para converter."
         pct.value = ""
@@ -315,6 +352,43 @@ def main(page: ft.Page):
     drop_zone.on_click = lambda _: picker.pick_files(
         allowed_extensions=["bin"], dialog_title="Selecione o log .bin")
 
+    def show_quality(report: dict):
+        lines = quality_lines(report)
+        color = THEME["ok"] if report["ok"] else THEME["warn"]
+        quality_icon.name = (ft.Icons.VERIFIED_ROUNDED if report["ok"]
+                             else ft.Icons.WARNING_AMBER_ROUNDED)
+        quality_icon.color = color
+        quality_card.border = ft.border.all(1, color)
+        quality_title.value = ("Qualidade do log: nenhum problema encontrado" if report["ok"]
+                               else f"Qualidade do log: {len(report['avisos'])} aviso(s)")
+        quality_list.controls = [ft.Text(f"•  {a}", size=12, color=THEME["text"], selectable=True)
+                                 for a in lines]
+        quality_rates.value = "Taxa real / nominal  ·  " + rates_summary(report)
+        quality_imu.value = report["imu_unidade"]["mensagem"]
+        quality_card.visible = True
+
+    def confirm_overwrite(paths: list) -> bool:
+        """Pergunta (da thread de conversão) se pode sobrescrever; bloqueia até a resposta."""
+        answer = {"ok": False}
+        done = threading.Event()
+
+        def close(ok: bool):
+            answer["ok"] = ok
+            page.close(dialog)
+            done.set()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=ft.Text("Sobrescrever arquivos?"),
+            content=ft.Text("Já existe(m) na pasta de destino:\n"
+                            + "\n".join(os.path.basename(p) for p in paths)),
+            actions=[ft.TextButton("Cancelar", on_click=lambda _: close(False)),
+                     ft.FilledButton("Sobrescrever", on_click=lambda _: close(True))],
+        )
+        page.open(dialog)
+        done.wait()
+        return answer["ok"]
+
     def set_busy(busy: bool):
         bar.visible = busy
         set_convert_enabled(not busy and state["path"] is not None)
@@ -323,7 +397,6 @@ def main(page: ft.Page):
 
     def run_conversion():
         src = state["path"]
-        out = os.path.splitext(src)[0] + ".ld"
         t_start = time.time()
 
         def show(p: float, label: str):
@@ -334,22 +407,41 @@ def main(page: ft.Page):
 
         try:
             show(0.0, "Lendo e decodificando pacotes...")
-            result = parse_file(src, lambda p: show(p * 0.7, "Lendo e decodificando pacotes..."))
+            result = parse_file(src, lambda p: show(p * 0.6, "Lendo e decodificando pacotes..."))
+            require_data(result)
 
-            show(0.7, "Reamostrando canais e gerando o .ld...")
-            write_ld(result, out, driver.value, vehicle.value, venue.value,
-                     event.value, session.value,
-                     progress_cb=lambda p: show(0.7 + p * 0.3, "Reamostrando canais e gerando o .ld..."))
+            show(0.6, "Verificando timestamps e qualidade do log...")
+            check = check_timestamps(result)
+            show_quality(build_quality_report(result, check))
+            segments = check.segments
+            outs = segment_paths(os.path.splitext(src)[0] + ".ld", len(segments))
+            existing = [o for o in outs if os.path.exists(o)]
+            if existing and not confirm_overwrite(existing):
+                stage.value = "Conversão cancelada: nenhum arquivo foi alterado."
+                pct.value = ""
+                set_busy(False)
+                return
 
-            state["out"] = out
-            n_channels = sum(len(g.definition.channels) for g in result.groups.values())
-            v_packets.value = f"{result.total_packets:,}".replace(",", ".")
+            label = "Reamostrando canais e gerando o .ld..."
+            for i, (seg, out) in enumerate(zip(segments, outs)):
+                write_ld(seg, out, driver.value, vehicle.value, venue.value,
+                         event.value, session.value,
+                         progress_cb=lambda p, i=i: show(
+                             0.65 + (i + p) / len(segments) * 0.35, label))
+
+            state["out"] = outs[0]
+            n_channels = len({ch.name for seg in segments for g in seg.groups.values()
+                              for ch in g.definition.channels})
+            v_packets.value = f"{sum(s.total_packets for s in segments):,}".replace(",", ".")
             v_channels.value = str(n_channels)
-            v_duration.value = fmt_duration(log_duration_s(result))
+            v_duration.value = fmt_duration(sum(log_duration_s(s) for s in segments))
             v_time.value = f"{time.time() - t_start:.1f} s"
-            out_path.value = out
+            out_path.value = "\n".join(outs)
+            if len(outs) > 1:
+                out_path.value = (f"{len(outs)} segmentos (saltos/resets de timestamp):\n"
+                                  + out_path.value)
             if result.warnings:
-                warn_text.value = "Avisos: " + " | ".join(result.warnings)
+                warn_text.value = "Avisos do parser: " + " | ".join(result.warnings)
                 warn_text.visible = True
             else:
                 warn_text.visible = False
@@ -372,6 +464,7 @@ def main(page: ft.Page):
             return
         result_card.visible = False
         error_card.visible = False
+        quality_card.visible = False
         set_busy(True)
         threading.Thread(target=run_conversion, daemon=True).start()
 
@@ -388,7 +481,7 @@ def main(page: ft.Page):
         ])),
         section_card("3", "Converter", ft.Column(spacing=14,
                                                  controls=[convert_btn, progress_box])),
-        result_card, error_card,
+        quality_card, result_card, error_card,
         ft.Container(height=4),
         ft.Text("Formula Route UFSCar  ·  Route Telemetry Converter",
                 size=11, color=THEME["muted"], text_align=ft.TextAlign.CENTER),

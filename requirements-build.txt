@@ -1,0 +1,3 @@
+# Build do executável (build.bat / flet pack). Só necessário para gerar o .exe.
+-r requirements.txt
+pyinstaller
