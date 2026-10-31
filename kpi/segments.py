@@ -19,6 +19,7 @@ import math
 from kpi.model import SESSION, Segment
 
 COLUMNS = ("nome", "inicio_s", "fim_s")
+TOLERANCE_S = 0.5           # fim um pouco além do log (arredondamento das marcações) não avisa
 
 
 def parse_segments(text: str) -> list:
@@ -78,7 +79,7 @@ def check_segments(segments: list, duration_s: float) -> list:
         if s.inicio_s >= duration_s:
             out.append(f"Segmento {s.nome!r} começa em {s.inicio_s:g} s, depois do fim do log "
                        f"({duration_s:.1f} s); ignorado.")
-        elif s.fim_s > duration_s + 1e-9 and math.isfinite(s.fim_s):
+        elif s.fim_s > duration_s + TOLERANCE_S and math.isfinite(s.fim_s):
             out.append(f"Segmento {s.nome!r} termina em {s.fim_s:g} s, depois do fim do log "
-                       f"({duration_s:.1f} s); cortado.")
+                       f"({duration_s:.2f} s); cortado.")
     return out

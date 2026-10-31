@@ -19,6 +19,9 @@ import flet as ft
 import csv_export
 import kpi
 import pipeline
+import report
+import report_data
+from report_data import fmt_value as fmt_kpi
 from parser import unwrap_timestamps
 
 # ----------------------------------------------------------------------------
@@ -107,13 +110,6 @@ def batch_lines(items: list) -> list:
     return out
 
 
-def fmt_kpi(v) -> str:
-    """Valor de KPI para a tabela: inteiro a partir de 1000, senão 4 algarismos."""
-    if v is None:
-        return "–"
-    return f"{v:.0f}" if abs(v) >= 1000 else f"{v:.4g}"
-
-
 def kpi_table_rows(sessions_a: list, sessions_b: list = None, segment: str = kpi.SESSION) -> list:
     """Linhas da tabela de KPIs de um segmento (1º segmento de log de cada arquivo).
 
@@ -130,6 +126,27 @@ def kpi_table_rows(sessions_a: list, sessions_b: list = None, segment: str = kpi
              fmt_kpi(r["delta"]),
              "–" if r["delta_pct"] is None else f"{r['delta_pct']:+.1f}%")
             for r in rows if r["segmento"] == segment]
+
+
+def chart_series(kind: str, res_a, res_b=None, segment: str = kpi.SESSION):
+    """(rótulos, valores A, valores B ou None) de um gráfico de barras, ou None sem dados.
+
+    kind: "hist_rpm", "hist_acelerador", "tempo_marcha" ou "frenagens" (pico por evento).
+    """
+    if kind == "frenagens":
+        evs = report_data.braking(res_a, segment)
+        if not evs:
+            return None
+        return [str(i) for i in range(1, len(evs) + 1)], [e["pico_psi"] for e in evs], None
+    get = (lambda r: report_data.gear_bars(r, segment)) if kind == "tempo_marcha" else \
+          (lambda r: report_data.hist_bars(r, kind, segment))
+    a = get(res_a)
+    b = get(res_b) if res_b is not None else None
+    joined = report_data.align_bars(a, b)
+    if joined is None:
+        return None
+    labels, va, vb = joined
+    return labels, va, (vb if res_b is not None else None)
 
 
 def log_duration_s(result) -> float:
@@ -194,6 +211,44 @@ def styled_field(label: str, value: str, expand: bool = True) -> ft.TextField:
         label_style=ft.TextStyle(color=THEME["muted"], size=12),
         cursor_color=THEME["primary"],
     )
+
+
+def bar_chart(title: str, unit: str, labels: list, a: list, b: list = None,
+              label_a: str = "A", label_b: str = "B") -> ft.Container:
+    """Gráfico de barras nativo do Flet (tooltip por barra; legenda só com duas séries)."""
+    col_a, col_b = report.STYLES["dark"]["a"], report.STYLES["dark"]["b"]
+    width = 14 if b is None else 8
+    top = max([v for v in list(a) + list(b or []) if v is not None] + [1e-9])
+    groups = []
+    for i, lab in enumerate(labels):
+        rods = [ft.BarChartRod(from_y=0, to_y=a[i], width=width, color=col_a,
+                               border_radius=ft.border_radius.only(top_left=4, top_right=4),
+                               tooltip=f"{label_a} · {lab}: {fmt_kpi(a[i])} {unit}")]
+        if b is not None:
+            rods.append(ft.BarChartRod(from_y=0, to_y=b[i], width=width, color=col_b,
+                                       border_radius=ft.border_radius.only(top_left=4, top_right=4),
+                                       tooltip=f"{label_b} · {lab}: {fmt_kpi(b[i])} {unit}"))
+        groups.append(ft.BarChartGroup(x=i, bar_rods=rods, bars_space=2))
+    step = max(1, len(labels) // 12)
+    chart = ft.BarChart(
+        bar_groups=groups, max_y=top * 1.1, height=190,
+        horizontal_grid_lines=ft.ChartGridLines(color=THEME["border"], width=1),
+        tooltip_bgcolor=THEME["surface2"],
+        left_axis=ft.ChartAxis(labels_size=40, title=ft.Text(unit, size=10, color=THEME["muted"]),
+                               title_size=16),
+        bottom_axis=ft.ChartAxis(labels_size=24, labels=[
+            ft.ChartAxisLabel(value=i, label=ft.Text(lab, size=9, color=THEME["muted"]))
+            for i, lab in enumerate(labels) if i % step == 0]),
+    )
+    head = [ft.Text(title, size=13, weight=ft.FontWeight.W_600, color=THEME["text"])]
+    if b is not None:
+        for name, col in ((label_a, col_a), (label_b, col_b)):
+            head.append(ft.Row(spacing=4, controls=[
+                ft.Container(width=10, height=10, bgcolor=col, border_radius=2),
+                ft.Text(name, size=11, color=THEME["muted"])]))
+    return ft.Container(bgcolor=THEME["surface2"], border_radius=12, padding=12,
+                        content=ft.Column(spacing=8, controls=[ft.Row(spacing=12, wrap=True,
+                                                                      controls=head), chart]))
 
 
 def styled_dropdown(label: str, options: list, value: str, width: int = 200) -> ft.Dropdown:
@@ -488,13 +543,22 @@ def main(page: ft.Page):
     kpi_segment = styled_dropdown("Segmento", [(kpi.SESSION, "Sessão inteira")], kpi.SESSION,
                                   width=260)
     kpi_table = ft.Column(spacing=0)
+    kpi_charts = ft.Column(spacing=12)
+    report_html = styled_checkbox("HTML", True)
+    report_pdf = styled_checkbox("PDF", True)
+    report_btn = primary_button("Gerar relatório", ft.Icons.DESCRIPTION_ROUNDED)
+    report_hint = ft.Text(
+        "" if report.matplotlib_available() else
+        "Relatório e gráficos de dispersão precisam do matplotlib "
+        "(pip install -r requirements-report.txt).", size=11, color=THEME["warn"],
+        visible=not report.matplotlib_available())
     kpi_warn = ft.Column(spacing=2)
     kpi_result = ft.Text("", size=12, color=THEME["muted"], selectable=True)
     kpi_card = ft.Container(
         visible=False, bgcolor=THEME["surface"], border=ft.border.all(1, THEME["border"]),
         border_radius=16, padding=20,
         content=ft.Column(spacing=12, controls=[
-            ft.Row(spacing=10, controls=[kpi_segment]), kpi_table, kpi_warn]))
+            ft.Row(spacing=10, controls=[kpi_segment]), kpi_table, kpi_charts, kpi_warn]))
 
     def option_row(label: str, info: ft.Text, *buttons):
         return ft.Column(spacing=4, controls=[
@@ -507,7 +571,10 @@ def main(page: ft.Page):
             option_row("Marcações de voltas/trechos (nome,inicio_s,fim_s)", marks_label,
                        marks_pick_btn, marks_clear_btn),
             option_row("Comparar com outra sessão", cmp_label, cmp_pick_btn, cmp_clear_btn),
-            kpi_btn, kpi_export_btn, kpi_result,
+            kpi_btn, kpi_export_btn,
+            ft.Row(spacing=16, controls=[ft.Text("Relatório:", size=12, color=THEME["muted"]),
+                                         report_html, report_pdf]),
+            report_btn, report_hint, kpi_result,
         ])),
         kpi_card,
     ])
@@ -546,6 +613,8 @@ def main(page: ft.Page):
         enable(batch_btn, state["batch_dir"] is not None and not busy)
         enable(kpi_btn, loaded and not busy)
         enable(kpi_export_btn, state.get("kpis") is not None and not busy)
+        enable(report_btn, state.get("kpis") is not None and not busy
+               and report.matplotlib_available())
         for b in (cfg_pick_btn, cfg_reset_btn, cfg_save_btn, marks_pick_btn, marks_clear_btn,
                   cmp_pick_btn, cmp_clear_btn):
             b.disabled = busy
@@ -789,7 +858,34 @@ def main(page: ft.Page):
         avisos = res.avisos + (state["kpis_b"][0][1].avisos if cmp else [])
         kpi_warn.controls = [ft.Text(f"•  {a}", size=11, color=THEME["warn"], selectable=True)
                              for a in avisos[:40]]
+        render_charts()
         kpi_card.visible = True
+
+    def render_charts():
+        seg = kpi_segment.value
+        res_a = state["kpis"][0][1]
+        res_b = state["kpis_b"][0][1] if state["kpis_b"] else None
+        la = os.path.splitext(os.path.basename(state["log"].path))[0]
+        lb = os.path.splitext(os.path.basename(state["log_b"].path))[0] if res_b else "B"
+        controls = []
+        brake_unit = next(
+            (k.unidade for k in res_a.kpis if k.nome == "Frenagem_Pico_Max"), "")
+        for kind, title, unit in (("hist_rpm", "Tempo por faixa de RPM", "%"),
+                                  ("hist_acelerador", "Tempo por faixa de acelerador", "%"),
+                                  ("tempo_marcha", "Tempo por marcha (N = neutro)", "s"),
+                                  ("frenagens", f"Pico de pressão por frenagem ({la})", brake_unit)):
+            # frenagens: só A (eventos de sessões diferentes não se pareiam)
+            series = chart_series(kind, res_a, res_b if kind != "frenagens" else None, seg)
+            if series:
+                controls.append(bar_chart(title, unit, series[0], series[1], series[2], la, lb))
+        if report.matplotlib_available():
+            for c in report.build_charts(res_a, res_b, la, lb, seg, style="dark",
+                                         only=("gg", "oleo")):
+                controls.append(ft.Container(
+                    bgcolor=THEME["surface2"], border_radius=12, padding=8,
+                    content=ft.Image(src_base64=report.figure_png_b64(c.figure),
+                                     fit=ft.ImageFit.CONTAIN)))
+        kpi_charts.controls = controls
 
     kpi_segment.on_change = lambda _: (render_kpis(), page.update())
 
@@ -921,6 +1017,24 @@ def main(page: ft.Page):
     cmp_pick_btn.on_click = lambda _: cmp_picker.pick_files(
         allowed_extensions=["bin"], dialog_title="Sessão para comparar (.bin)")
     cmp_clear_btn.on_click = on_cmp_clear
+    def report_task():
+        formats = tuple(f for f, cb in (("html", report_html), ("pdf", report_pdf)) if cb.value)
+        if not formats:
+            raise ValueError("Escolha HTML e/ou PDF.")
+        log = state["log"]
+        outs = pipeline.report_paths(log, formats)
+        existing = [o for o in outs if os.path.exists(o)]
+        if existing and not confirm_overwrite(existing):
+            return cancelled()
+        show(0.3, "Gerando relatório...")
+        written = pipeline.write_report(log, session_meta(), state["kpis"], state["log_b"],
+                                        state["kpis_b"], formats)
+        state["out"] = written[0]
+        kpi_result.value = "Relatório gravado:\n" + "\n".join(written)
+        show(1.0, "Relatório gerado.")
+        notify("Relatório gerado!", ok=True)
+
+    report_btn.on_click = guarded(report_task, report_btn)
     kpi_btn.on_click = guarded(kpi_task, kpi_btn)
     kpi_export_btn.on_click = guarded(kpi_export_task, kpi_export_btn)
 

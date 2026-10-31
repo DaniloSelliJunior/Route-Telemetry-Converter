@@ -340,3 +340,23 @@ def test_nan_samples_do_not_break_kpis():
               Acel_X=sig(200, v), Acel_Y=sig(200, v))
     no_failures(res)
     assert val(res, "Acelerador_Pleno_Pct") == 100
+
+
+def test_throttle_histogram_in_events_sums_to_100():
+    thr = np.concatenate([np.zeros(100), np.full(100, 55.0), np.full(300, 104.0)])
+    ev = run(Hall_Acelerador=sig(50, thr)).eventos[SESSION]["hist_acelerador"]
+    assert ev["bordas"][0] == 0 and ev["bordas"][-1] == 100
+    assert ev["pct"][0] == 20 and ev["pct"][5] == 20 and ev["pct"][-1] == 60
+
+
+def test_gg_usage_in_segments_uses_session_reference():
+    # 1ª metade forte (|a| = 1), 2ª fraca (0,5): na 2ª o uso é 50% da referência da sessão
+    lon = np.concatenate([np.full(1000, 1.0), np.full(1000, 0.5)])
+    res = run(segments=[Segment("fraco", 5.0, 10.0)],
+              Acel_X=sig(200, lon), Acel_Y=sig(200, np.zeros(2000)))
+    assert val(res, "Uso_Circulo_GG_Medio_Pct", "fraco") == pytest.approx(50, abs=1)
+
+
+def test_longitudinal_side_without_samples_is_zero_not_negative():
+    res = run(Acel_X=sig(200, np.full(400, 0.6)), Acel_Y=sig(200, np.zeros(400)))
+    assert val(res, "G_Longitudinal_Neg_P99") == 0

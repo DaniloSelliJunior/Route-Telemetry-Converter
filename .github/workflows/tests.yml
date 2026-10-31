@@ -26,6 +26,7 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             requirements-dev.txt
+            requirements-report.txt
 
       - name: Install dependencies
         run: |

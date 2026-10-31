@@ -42,6 +42,7 @@ def compute_kpis(channels: dict, segments: list = None, config: dict = None,
     dur = duration_s(channels)
     marks = list(segments or [])
     result.avisos.extend(check_segments(marks, dur))
+    shared = {}                     # preenchido na sessão inteira, lido pelos segmentos
     for seg in [Segment(SESSION, 0.0, math.inf)] + marks:
         if seg.inicio_s >= dur and seg.nome != SESSION:
             continue
@@ -49,7 +50,7 @@ def compute_kpis(channels: dict, segments: list = None, config: dict = None,
         if not sliced:
             result.avisos.append(f"[{seg.nome}] sem amostras no trecho.")
             continue
-        ctx = Ctx(seg, cfg, units, result.avisos, {})
+        ctx = Ctx(seg, cfg, units, result.avisos, {}, shared=shared)
         for mod in MODULES:
             try:
                 mod.compute(sliced, ctx)

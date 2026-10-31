@@ -169,6 +169,43 @@ def write_comparison(log_a: LoadedLog, sessions_a: list, log_b: LoadedLog, sessi
     return path
 
 
+# ---- relatório (requer matplotlib: requirements-report.txt) ---------------------
+
+REPORT_FORMATS = ("html", "pdf")
+
+
+def report_paths(log: LoadedLog, formats=REPORT_FORMATS, out_dir: Optional[str] = None) -> list:
+    base = output_base(log.path, out_dir)
+    return [f"{base}_relatorio.{fmt}" for fmt in formats]
+
+
+def write_report(log: LoadedLog, meta: SessionMeta, sessions: list, log_b: LoadedLog = None,
+                 sessions_b: list = None, formats=REPORT_FORMATS,
+                 out_dir: Optional[str] = None) -> list:
+    """Grava <base>_relatorio.html/.pdf (comparação com log_b se houver)."""
+    import report
+    import report_data
+    notes = []
+    if len(log.segments) > 1:
+        notes.append(f"O log tem {len(log.segments)} segmentos (saltos/resets de timestamp); "
+                     f"os gráficos usam o primeiro.")
+    inp = report.ReportInput(
+        summary=report_data.session_summary(log, meta), quality=log.quality,
+        sessions_a=sessions, label_a=os.path.splitext(os.path.basename(log.path))[0],
+        sessions_b=sessions_b,
+        label_b=os.path.splitext(os.path.basename(log_b.path))[0] if log_b else "B",
+        notes=notes)
+    paths = report_paths(log, formats, out_dir)
+    for fmt, path in zip(formats, paths):
+        if fmt == "html":
+            report.write_html(path, inp)
+        elif fmt == "pdf":
+            report.write_pdf(path, inp)
+        else:
+            raise ValueError(f"Formato de relatório inválido: {fmt!r}.")
+    return paths
+
+
 @dataclass
 class BatchItem:
     source: str

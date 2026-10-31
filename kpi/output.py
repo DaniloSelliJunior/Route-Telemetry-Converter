@@ -10,7 +10,8 @@ from version import __version__
 CSV_COLUMNS = ["sessao", "segmento", "kpi", "valor", "unidade"]
 COMPARE_COLUMNS = ["segmento", "kpi", "unidade", "valor_a", "valor_b", "delta", "delta_pct"]
 # eventos leves que vão no JSON (pontos de g-g/óleo ficam só para os gráficos)
-JSON_EVENTS = ("frenagens", "trocas", "arrancadas", "tempo_marcha", "hist_rpm")
+JSON_EVENTS = ("frenagens", "trocas", "arrancadas", "tempo_marcha", "hist_rpm",
+               "hist_acelerador")
 
 
 def kpi_rows(sessions: list) -> list:

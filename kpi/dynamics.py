@@ -7,6 +7,7 @@ montagem da IMU no carro não está documentada. Valores na unidade da IMU.
 
 import numpy as np
 
+from kpi.model import SESSION
 from signals import decimate, interp_to, percentile, rate_of, smooth
 
 GG_MAX_POINTS = 4000
@@ -27,9 +28,10 @@ def compute(ch: dict, ctx) -> None:
             lat = smooth(lat, f, c["suavizacao_s"])
         unit = ctx.units.get(lon_n, "")
         ctx.add("G_Lateral_P99", percentile(np.abs(lat), p), unit)
-        ctx.add("G_Longitudinal_Pos_P99", percentile(lon, p), unit)
-        neg = percentile(lon, 100.0 - p)
-        ctx.add("G_Longitudinal_Neg_P99", None if neg is None else -neg, unit)
+        # lado sem nenhuma amostra (ex.: trecho sem frenagem) vale 0, não negativo
+        pos, neg = percentile(lon, p), percentile(lon, 100.0 - p)
+        ctx.add("G_Longitudinal_Pos_P99", None if pos is None else max(pos, 0.0), unit)
+        ctx.add("G_Longitudinal_Neg_P99", None if neg is None else max(-neg, 0.0), unit)
         comb = np.hypot(lon, lat)
         comb_p = percentile(comb, p)
         ctx.add("G_Combinado_P99", comb_p, unit)
@@ -38,7 +40,12 @@ def compute(ch: dict, ctx) -> None:
         if "Velocidade" in ch:
             tv, v = ch["Velocidade"]
             moving = np.nan_to_num(interp_to(tv, v, t), nan=0.0) > c["movimento_kmh"]
-        ref = c["g_max_referencia"] if c["g_max_referencia"] is not None else comb_p
+        # referência: configurada, senão o P99 da sessão inteira (comparável entre segmentos)
+        if ctx.seg.nome == SESSION:
+            ctx.shared["g_ref"] = comb_p
+        ref = c["g_max_referencia"]
+        if ref is None:
+            ref = ctx.shared.get("g_ref", comb_p)
         use = comb[moving & np.isfinite(comb)]
         if use.size and ref:
             ctx.add("Uso_Circulo_GG_Medio_Pct", 100.0 * use.mean() / ref, "%")

@@ -1,3 +1,5 @@
-# Build do executável (build.bat / flet pack). Só necessário para gerar o .exe.
+# Build do executável (build.bat / flet pack). Inclui o matplotlib para o .exe
+# já sair com o relatório HTML/PDF e os gráficos de dispersão.
 -r requirements.txt
+-r requirements-report.txt
 pyinstaller

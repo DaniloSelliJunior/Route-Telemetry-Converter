@@ -43,6 +43,11 @@ def compute(ch: dict, ctx) -> None:
             ctx.add("Acelerador_Pleno_Pct", full, "%")
             ctx.add("Acelerador_Zero_Pct", zero, "%")
             ctx.add("Acelerador_Parcial_Pct", 100.0 - full - zero, "%")
+            # distribuição em faixas de 10% (fora de 0-100 entra na faixa da ponta)
+            edges = np.arange(0.0, 101.0, 10.0)
+            counts, _ = np.histogram(np.clip(fin, 0.0, 100.0), edges)
+            ctx.eventos["hist_acelerador"] = {"bordas": edges.tolist(),
+                                              "pct": (100.0 * counts / fin.size).tolist()}
         f = rate_of(t)
         if np.isfinite(f):
             rate = throttle_rate(thr, f, dcfg["suavizacao_acelerador_s"])

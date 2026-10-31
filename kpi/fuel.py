@@ -32,7 +32,7 @@ def compute(ch: dict, ctx) -> None:
     t, level = ch["Nivel_Combustivel"]
     dur = float(t[-1] - t[0]) if t.size else 0.0
     if dur < c["duracao_min_s"]:
-        ctx.warn(f"Consumo: trecho de {dur:.0f} s, menor que o mínimo de "
+        ctx.warn(f"Consumo: trecho de {dur:.1f} s, menor que o mínimo de "
                  f"{c['duracao_min_s']:g} s; não calculado.")
         return
     fit = fit_consumption(t, level)

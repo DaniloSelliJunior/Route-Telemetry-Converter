@@ -44,6 +44,7 @@ class Ctx:
     avisos: list
     eventos: dict
     kpis: list = field(default_factory=list)
+    shared: dict = field(default_factory=dict)    # valores da sessão inteira usados nos segmentos
 
     def add(self, nome: str, valor, unidade: str = ""):
         if valor is None:

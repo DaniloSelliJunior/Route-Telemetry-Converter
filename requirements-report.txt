@@ -1,0 +1,3 @@
+# Relatório (HTML/PDF) e gráficos de dispersão da GUI. Opcional: o núcleo
+# (parser, CSV, KPIs) só precisa de NumPy.
+matplotlib>=3.7

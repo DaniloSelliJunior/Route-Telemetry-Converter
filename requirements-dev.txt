@@ -1,5 +1,7 @@
 # Dependências de desenvolvimento/testes. O requirements.txt continua só com o
-# que o app precisa; o PyInstaller fica em requirements-build.txt (build.bat).
+# que o app precisa; o PyInstaller fica em requirements-build.txt (build.bat) e
+# o matplotlib em requirements-report.txt (relatório; os testes dele precisam).
 -r requirements.txt
+-r requirements-report.txt
 pytest>=8.0
 pytest-cov>=5.0

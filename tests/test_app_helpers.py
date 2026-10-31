@@ -4,7 +4,8 @@ import pytest
 
 pytest.importorskip("flet")                       # app.py importa flet no topo
 
-from app import (batch_lines, fmt_duration, fmt_kpi, fmt_size, kpi_table_rows,  # noqa: E402
+from app import (batch_lines, chart_series, fmt_duration, fmt_kpi, fmt_size,  # noqa: E402
+                 kpi_table_rows,
                  log_duration_s, quality_lines, rates_summary)
 from builders import U32, packet, synthetic_log, zeros   # noqa: E402
 from parser import parse_bin                              # noqa: E402
@@ -92,3 +93,15 @@ def test_kpi_table_rows_with_and_without_comparison():
     assert kpi_table_rows(a, b) == [("V", "100", "km/h", "110", "10", "+10.0%")]
     assert kpi_table_rows(a, b, "L1") == [("V", "90", "km/h", "–", "–", "–")]
     assert kpi_table_rows([]) == []
+
+
+def test_chart_series_for_native_bar_charts():
+    from kpi import KpiResult
+    ev = {"sessao": {"tempo_marcha": {"1": 2.0, "2": 3.0},
+                     "frenagens": [{"pico_psi": 400.0}, {"pico_psi": 600.0}]}}
+    a = KpiResult([], [], ev)
+    b = KpiResult([], [], {"sessao": {"tempo_marcha": {"2": 1.0, "3": 4.0}}})
+    assert chart_series("tempo_marcha", a) == (["1", "2"], [2.0, 3.0], None)
+    assert chart_series("tempo_marcha", a, b) == (["1", "2", "3"], [2.0, 3.0, 0.0], [0.0, 1.0, 4.0])
+    assert chart_series("frenagens", a) == (["1", "2"], [400.0, 600.0], None)
+    assert chart_series("hist_rpm", a) is None and chart_series("frenagens", b) is None

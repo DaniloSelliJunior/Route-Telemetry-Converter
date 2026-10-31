@@ -46,7 +46,7 @@ DEFAULT_CONFIG = {
         "lambda_pobre_limite": 0.95,
     },
     "consumo": {
-        "duracao_min_s": 60.0,
+        "duracao_min_s": 30.0,
         "r2_min": 0.5,                      # abaixo disso: sinal muito ruidoso
     },
     "arrancada": {
