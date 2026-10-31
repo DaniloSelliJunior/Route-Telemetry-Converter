@@ -68,6 +68,16 @@ def segment_paths(path: str, n_segments: int) -> list:
     return [f"{base}_seg{i}{ext}" for i in range(1, n_segments + 1)]
 
 
+def check_span(all_ts: dict, t0: int, max_span_s: float = MAX_GRID_SPAN_S):
+    """ValueError se o log cobrir mais que max_span_s (antes de alocar qualquer grade)."""
+    span_s = max(int(ts.max()) - t0 for ts in all_ts.values()) / 1000.0
+    if span_s > max_span_s:
+        raise ValueError(
+            f"O log cobre {span_s / 3600:.1f} h, acima do limite de segurança de "
+            f"{max_span_s / 3600:g} h para a grade reamostrada. Provável salto de "
+            f"timestamp não tratado (use parser.check_timestamps).")
+
+
 def _build_channels(result: ParseResult, max_span_s: float = MAX_GRID_SPAN_S):
     """Lista de (nome, unidade, freq_hz, np.ndarray reamostrado).
 
@@ -75,12 +85,7 @@ def _build_channels(result: ParseResult, max_span_s: float = MAX_GRID_SPAN_S):
     cobrir mais de max_span_s, levanta ValueError antes de alocar a grade.
     """
     all_ts, t0 = aligned_timestamps(result)
-    span_s = max(int(ts.max()) - t0 for ts in all_ts.values()) / 1000.0
-    if span_s > max_span_s:
-        raise ValueError(
-            f"O log cobre {span_s / 3600:.1f} h, acima do limite de segurança de "
-            f"{max_span_s / 3600:g} h para a grade reamostrada. Provável salto de "
-            f"timestamp não tratado (use parser.check_timestamps).")
+    check_span(all_ts, t0, max_span_s)
     channels = []
     for pid, group in result.groups.items():
         d = group.definition

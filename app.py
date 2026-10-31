@@ -14,9 +14,9 @@ import time
 
 import flet as ft
 
-from exporter import require_data, segment_paths, write_ld
-from parser import check_timestamps, parse_file, unwrap_timestamps
-from quality import build_quality_report
+import csv_export
+import pipeline
+from parser import unwrap_timestamps
 
 # ----------------------------------------------------------------------------
 # PALETA (valores provisórios: troque pelos hex oficiais da equipe)
@@ -88,6 +88,22 @@ def rates_summary(report: dict) -> str:
     return "  ·  ".join(parts)
 
 
+def batch_lines(items: list) -> list:
+    """Uma linha por arquivo do lote: status, nome e mensagem."""
+    icons = {"ok": "OK", "pulado": "PULADO", "erro": "ERRO"}
+    out = []
+    for it in items:
+        line = f"[{icons[it.status]}] {os.path.basename(it.source)}"
+        if it.status == "ok":
+            line += f": {len(it.outputs)} arquivo(s)"
+            if it.warnings:
+                line += f", {it.warnings} aviso(s)"
+        if it.message:
+            line += f" ({it.message})" if it.status == "ok" else f": {it.message}"
+        out.append(line)
+    return out
+
+
 def log_duration_s(result) -> float:
     """Duração do log (maior intervalo entre os grupos de pacotes)."""
     unwrapped = (unwrap_timestamps(g.timestamps_ms) for g in result.groups.values())
@@ -152,6 +168,45 @@ def styled_field(label: str, value: str, expand: bool = True) -> ft.TextField:
     )
 
 
+def styled_dropdown(label: str, options: list, value: str, width: int = 200) -> ft.Dropdown:
+    """options: [(chave, texto)]."""
+    return ft.Dropdown(
+        label=label, value=value, width=width, dense=True,
+        options=[ft.dropdown.Option(key=k, text=t) for k, t in options],
+        bgcolor=THEME["surface2"], border_color=THEME["border"],
+        focused_border_color=THEME["primary"], border_radius=10, color=THEME["text"],
+        label_style=ft.TextStyle(color=THEME["muted"], size=12),
+    )
+
+
+def primary_button(label: str, icon) -> ft.Container:
+    return ft.Container(
+        ink=True, disabled=True, opacity=0.45,
+        border_radius=12, padding=ft.padding.symmetric(vertical=15),
+        alignment=ft.alignment.center,
+        gradient=ft.LinearGradient(
+            begin=ft.alignment.center_left, end=ft.alignment.center_right,
+            colors=[THEME["primary"], THEME["primary_d"]]),
+        content=ft.Row(
+            alignment=ft.MainAxisAlignment.CENTER, spacing=10,
+            controls=[ft.Icon(icon, color="#FFFFFF"),
+                      ft.Text(label, size=15, weight=ft.FontWeight.BOLD, color="#FFFFFF")]),
+    )
+
+
+def outline_button(label: str, icon, on_click=None) -> ft.OutlinedButton:
+    return ft.OutlinedButton(
+        label, icon=icon, on_click=on_click,
+        style=ft.ButtonStyle(color=THEME["text"],
+                             side=ft.BorderSide(1, THEME["border"]),
+                             shape=ft.RoundedRectangleBorder(radius=10)))
+
+
+def styled_checkbox(label: str, value: bool) -> ft.Checkbox:
+    return ft.Checkbox(label=label, value=value, active_color=THEME["primary"],
+                       label_style=ft.TextStyle(color=THEME["text"], size=13))
+
+
 # ----------------------------------------------------------------------------
 # Aplicação
 # ----------------------------------------------------------------------------
@@ -160,14 +215,15 @@ def main(page: ft.Page):
     page.theme_mode = ft.ThemeMode.DARK
     page.theme = ft.Theme(color_scheme_seed=THEME["primary"])
     page.bgcolor = THEME["bg"]
-    page.window_width = 760
-    page.window_height = 820
-    page.window_min_width = 640
-    page.window_min_height = 700
+    page.window_width = 820
+    page.window_height = 880
+    page.window_min_width = 680
+    page.window_min_height = 720
     page.padding = ft.padding.symmetric(horizontal=28, vertical=22)
     page.scroll = ft.ScrollMode.AUTO
 
-    state = {"path": None, "out": None}
+    # estado compartilhado entre as abas: o .bin é lido uma vez só (pipeline.load_log)
+    state = {"path": None, "log": None, "busy": False, "out": None, "batch_dir": None}
 
     # ---- cabeçalho -------------------------------------------------------
     brand = []
@@ -206,7 +262,7 @@ def main(page: ft.Page):
             colors=[THEME["primary"], THEME["primary_d"], THEME["bg"]]),
     )
     intro = ft.Text(
-        "Converta o log bruto do datalogger (.bin) para o formato do MoTeC i2 Pro (.ld).",
+        "Converta o log bruto do datalogger (.bin) para MoTeC i2 Pro (.ld) ou CSV.",
         size=13, color=THEME["muted"])
 
     # ---- 1. arquivo ------------------------------------------------------
@@ -227,27 +283,18 @@ def main(page: ft.Page):
             controls=[drop_icon, drop_title, drop_hint]),
     )
 
-    # ---- 2. sessão -------------------------------------------------------
+    # ---- 2. sessão (compartilhado: .ld e metadados do CSV) ----------------
     driver = styled_field("Piloto", "Piloto Route")
     vehicle = styled_field("Veículo", "FR2026")
     venue = styled_field("Local", "UFSCar")
     event = styled_field("Evento", "")
     session = styled_field("Sessão", "")
 
-    # ---- 3. conversão ----------------------------------------------------
-    convert_btn = ft.Container(
-        ink=True, disabled=True, opacity=0.45,
-        border_radius=12, padding=ft.padding.symmetric(vertical=15),
-        alignment=ft.alignment.center,
-        gradient=ft.LinearGradient(
-            begin=ft.alignment.center_left, end=ft.alignment.center_right,
-            colors=[THEME["primary"], THEME["primary_d"]]),
-        content=ft.Row(
-            alignment=ft.MainAxisAlignment.CENTER, spacing=10,
-            controls=[ft.Icon(ft.Icons.SWAP_HORIZ_ROUNDED, color="#FFFFFF"),
-                      ft.Text("Converter para .ld", size=15,
-                              weight=ft.FontWeight.BOLD, color="#FFFFFF")]),
-    )
+    def session_meta() -> pipeline.SessionMeta:
+        return pipeline.SessionMeta(driver.value, vehicle.value, venue.value,
+                                    event.value, session.value)
+
+    # ---- progresso (uma operação por vez) -------------------------------
     stage = ft.Text("Selecione um arquivo para começar.", size=13, color=THEME["muted"])
     pct = ft.Text("", size=12, color=THEME["muted"])
     bar = ft.ProgressBar(value=0, visible=False, color=THEME["primary"],
@@ -257,36 +304,13 @@ def main(page: ft.Page):
         bar,
     ])
 
-    # ---- resultado -------------------------------------------------------
-    v_packets = ft.Text("-", size=18, weight=ft.FontWeight.BOLD, color=THEME["text"])
-    v_channels = ft.Text("-", size=18, weight=ft.FontWeight.BOLD, color=THEME["text"])
-    v_duration = ft.Text("-", size=18, weight=ft.FontWeight.BOLD, color=THEME["text"])
-    v_time = ft.Text("-", size=18, weight=ft.FontWeight.BOLD, color=THEME["text"])
-    out_path = ft.Text("", size=12, color=THEME["muted"], selectable=True)
-    warn_text = ft.Text("", size=12, color=THEME["warn"], visible=False)
-    open_btn = ft.OutlinedButton(
-        "Abrir pasta", icon=ft.Icons.FOLDER_OPEN_ROUNDED,
-        style=ft.ButtonStyle(color=THEME["text"],
-                             side=ft.BorderSide(1, THEME["border"]),
-                             shape=ft.RoundedRectangleBorder(radius=10)),
-        on_click=lambda _: state["out"] and open_folder(state["out"]))
-    result_card = ft.Container(
-        visible=False,
-        bgcolor=THEME["surface"],
-        border=ft.border.all(1, THEME["ok"]),
-        border_radius=16, padding=20,
-        content=ft.Column(spacing=12, controls=[
-            ft.Row(spacing=8, controls=[
-                ft.Icon(ft.Icons.CHECK_CIRCLE_ROUNDED, color=THEME["ok"], size=22),
-                ft.Text("Conversão concluída", size=15,
-                        weight=ft.FontWeight.W_600, color=THEME["text"])]),
-            ft.Row(spacing=10, controls=[
-                stat_tile("Pacotes", v_packets), stat_tile("Canais", v_channels),
-                stat_tile("Duração do log", v_duration), stat_tile("Tempo", v_time)]),
-            out_path, warn_text, ft.Row(controls=[open_btn]),
-        ]),
-    )
-    # ---- qualidade do log -------------------------------------------------
+    def show(p: float, label: str):
+        bar.value = p
+        pct.value = f"{int(p * 100)}%"
+        stage.value = label
+        page.update()
+
+    # ---- qualidade do log (acima das abas) -------------------------------
     quality_icon = ft.Icon(ft.Icons.VERIFIED_ROUNDED, color=THEME["ok"], size=22)
     quality_title = ft.Text("", size=15, weight=ft.FontWeight.W_600, color=THEME["text"])
     quality_list = ft.Column(spacing=4)
@@ -313,10 +337,144 @@ def main(page: ft.Page):
                                  ft.Container(expand=True, content=error_text)]),
     )
 
+    # ---- aba Converter (.ld) ----------------------------------------------
+    convert_btn = primary_button("Converter para .ld", ft.Icons.SWAP_HORIZ_ROUNDED)
+    v_packets = ft.Text("-", size=18, weight=ft.FontWeight.BOLD, color=THEME["text"])
+    v_channels = ft.Text("-", size=18, weight=ft.FontWeight.BOLD, color=THEME["text"])
+    v_duration = ft.Text("-", size=18, weight=ft.FontWeight.BOLD, color=THEME["text"])
+    v_time = ft.Text("-", size=18, weight=ft.FontWeight.BOLD, color=THEME["text"])
+    out_path = ft.Text("", size=12, color=THEME["muted"], selectable=True)
+    warn_text = ft.Text("", size=12, color=THEME["warn"], visible=False, selectable=True)
+    result_card = ft.Container(
+        visible=False,
+        bgcolor=THEME["surface"],
+        border=ft.border.all(1, THEME["ok"]),
+        border_radius=16, padding=20,
+        content=ft.Column(spacing=12, controls=[
+            ft.Row(spacing=8, controls=[
+                ft.Icon(ft.Icons.CHECK_CIRCLE_ROUNDED, color=THEME["ok"], size=22),
+                ft.Text("Conversão concluída", size=15,
+                        weight=ft.FontWeight.W_600, color=THEME["text"])]),
+            ft.Row(spacing=10, controls=[
+                stat_tile("Pacotes", v_packets), stat_tile("Canais", v_channels),
+                stat_tile("Duração do log", v_duration), stat_tile("Tempo", v_time)]),
+            out_path, warn_text,
+            ft.Row(controls=[outline_button(
+                "Abrir pasta", ft.Icons.FOLDER_OPEN_ROUNDED,
+                lambda _: state["out"] and open_folder(state["out"]))]),
+        ]),
+    )
+    tab_converter = ft.Column(spacing=14, controls=[
+        section_card("3", "Converter para MoTeC .ld", convert_btn), result_card])
+
+    # ---- aba CSV ------------------------------------------------------------
+    csv_mode = ft.RadioGroup(
+        value="unificado",
+        content=ft.Column(spacing=2, controls=[
+            ft.Radio(value="unificado", label="Unificado: um CSV numa taxa só (interpolado)",
+                     active_color=THEME["primary"],
+                     label_style=ft.TextStyle(color=THEME["text"], size=13)),
+            ft.Radio(value="grupos", label="Por grupo: um CSV por grupo, taxas nativas, sem interpolação",
+                     active_color=THEME["primary"],
+                     label_style=ft.TextStyle(color=THEME["text"], size=13)),
+        ]))
+    csv_rate = styled_dropdown("Taxa (unificado)", [(str(r), f"{r} Hz") for r in csv_export.UNIFIED_RATES],
+                               str(csv_export.DEFAULT_RATE), width=170)
+    csv_profile = styled_dropdown("Perfil", [(k, p.label) for k, p in csv_export.PROFILES.items()],
+                                  "padrao", width=170)
+    csv_btn = primary_button("Exportar CSV", ft.Icons.TABLE_CHART_ROUNDED)
+    csv_result = ft.Text("", size=12, color=THEME["muted"], selectable=True)
+    csv_result_card = ft.Container(
+        visible=False, bgcolor=THEME["surface"], border=ft.border.all(1, THEME["ok"]),
+        border_radius=16, padding=20,
+        content=ft.Column(spacing=10, controls=[
+            ft.Row(spacing=8, controls=[
+                ft.Icon(ft.Icons.CHECK_CIRCLE_ROUNDED, color=THEME["ok"], size=22),
+                ft.Text("CSV exportado", size=15, weight=ft.FontWeight.W_600,
+                        color=THEME["text"])]),
+            csv_result,
+            ft.Row(controls=[outline_button(
+                "Abrir pasta", ft.Icons.FOLDER_OPEN_ROUNDED,
+                lambda _: state["out"] and open_folder(state["out"]))]),
+        ]))
+
+    def csv_options() -> pipeline.CsvOptions:
+        return pipeline.CsvOptions(csv_mode.value, float(csv_rate.value), csv_profile.value)
+
+    def on_mode_change(_):
+        csv_rate.disabled = csv_mode.value != "unificado"
+        page.update()
+
+    csv_mode.on_change = on_mode_change
+
+    # lote (pasta inteira): usa as opções de CSV acima e os dados da sessão
+    batch_folder = ft.Text("Nenhuma pasta escolhida.", size=12, color=THEME["muted"],
+                           selectable=True)
+    batch_ld = styled_checkbox(".ld (MoTeC)", True)
+    batch_csv = styled_checkbox("CSV (opções acima)", False)
+    batch_overwrite = styled_checkbox("Sobrescrever arquivos existentes", False)
+    batch_btn = primary_button("Converter pasta", ft.Icons.DRIVE_FOLDER_UPLOAD_ROUNDED)
+    batch_pick_btn = outline_button("Escolher pasta", ft.Icons.FOLDER_ROUNDED)
+    batch_summary_text = ft.Text("", size=13, weight=ft.FontWeight.W_600, color=THEME["text"])
+    batch_list = ft.Column(spacing=3)
+
+    tab_csv = ft.Column(spacing=14, controls=[
+        section_card("3", "Exportar CSV", ft.Column(spacing=12, controls=[
+            csv_mode,
+            ft.Row(spacing=10, controls=[csv_rate, csv_profile]),
+            ft.Text("Excel BR: ponto e vírgula, vírgula decimal, UTF-8 com BOM. "
+                    "NaN/inf são escritos como texto (nan, inf, -inf). "
+                    "Um .json com os metadados da sessão é gravado ao lado.",
+                    size=11, color=THEME["muted"]),
+            csv_btn,
+        ])),
+        csv_result_card,
+        section_card("4", "Conversão em lote (pasta)", ft.Column(spacing=10, controls=[
+            ft.Row(spacing=10, vertical_alignment=ft.CrossAxisAlignment.CENTER, controls=[
+                batch_pick_btn, ft.Container(expand=True, content=batch_folder)]),
+            ft.Row(spacing=16, wrap=True, controls=[batch_ld, batch_csv, batch_overwrite]),
+            batch_btn, batch_summary_text, batch_list,
+        ])),
+    ])
+
+    # ---- abas (seletor próprio: evita altura ilimitada do ft.Tabs numa página com rolagem)
+    tabs = {"Converter": tab_converter, "CSV": tab_csv}
+    tab_buttons = {}
+
+    def select_tab(name: str):
+        for n, btn in tab_buttons.items():
+            sel = n == name
+            btn.bgcolor = THEME["primary"] if sel else THEME["surface2"]
+            btn.content.color = "#FFFFFF" if sel else THEME["muted"]
+            tabs[n].visible = sel
+        page.update()
+
+    for name in tabs:
+        tab_buttons[name] = ft.Container(
+            ink=True, border_radius=10,
+            padding=ft.padding.symmetric(horizontal=18, vertical=9),
+            content=ft.Text(name, size=13, weight=ft.FontWeight.W_600),
+            on_click=lambda _, n=name: select_tab(n))
+    tab_bar = ft.Row(spacing=8, controls=list(tab_buttons.values()))
+
     # ---- lógica ----------------------------------------------------------
-    def set_convert_enabled(enabled: bool):
-        convert_btn.disabled = not enabled
-        convert_btn.opacity = 1.0 if enabled else 0.45
+    def enable(btn: ft.Container, enabled: bool):
+        btn.disabled = not enabled
+        btn.opacity = 1.0 if enabled else 0.45
+
+    def refresh_buttons():
+        busy, loaded = state["busy"], state["log"] is not None
+        enable(convert_btn, loaded and not busy)
+        enable(csv_btn, loaded and not busy)
+        enable(batch_btn, state["batch_dir"] is not None and not busy)
+        drop_zone.disabled = busy
+        batch_pick_btn.disabled = busy
+
+    def set_busy(busy: bool):
+        state["busy"] = busy
+        bar.visible = busy
+        refresh_buttons()
+        page.update()
 
     def notify(msg, ok=True):
         page.snack_bar = ft.SnackBar(
@@ -325,32 +483,9 @@ def main(page: ft.Page):
         page.snack_bar.open = True
         page.update()
 
-    def on_pick(e: ft.FilePickerResultEvent):
-        if not e.files:
-            return
-        path = e.files[0].path
-        state["path"] = path
-        drop_icon.name = ft.Icons.DESCRIPTION_ROUNDED
-        drop_icon.color = THEME["ok"]
-        drop_title.value = os.path.basename(path)
-        try:
-            size = fmt_size(os.path.getsize(path))
-        except OSError:
-            size = "tamanho desconhecido"
-        drop_hint.value = f"{size}  ·  clique para trocar o arquivo"
-        drop_zone.border = ft.border.all(1.5, THEME["ok"])
-        result_card.visible = False
-        error_card.visible = False
-        quality_card.visible = False
-        set_convert_enabled(True)
-        stage.value = "Pronto para converter."
-        pct.value = ""
-        page.update()
-
-    picker = ft.FilePicker(on_result=on_pick)
-    page.overlay.append(picker)
-    drop_zone.on_click = lambda _: picker.pick_files(
-        allowed_extensions=["bin"], dialog_title="Selecione o log .bin")
+    def show_error(msg: str):
+        error_text.value = msg
+        error_card.visible = True
 
     def show_quality(report: dict):
         lines = quality_lines(report)
@@ -368,7 +503,7 @@ def main(page: ft.Page):
         quality_card.visible = True
 
     def confirm_overwrite(paths: list) -> bool:
-        """Pergunta (da thread de conversão) se pode sobrescrever; bloqueia até a resposta."""
+        """Pergunta (da thread de trabalho) se pode sobrescrever; bloqueia até a resposta."""
         answer = {"ok": False}
         done = threading.Event()
 
@@ -389,86 +524,157 @@ def main(page: ft.Page):
         done.wait()
         return answer["ok"]
 
-    def set_busy(busy: bool):
-        bar.visible = busy
-        set_convert_enabled(not busy and state["path"] is not None)
-        drop_zone.disabled = busy
+    def run_task(task):
+        """Executa `task` numa thread; erros vão para o card de erro (a GUI nunca trava)."""
+        error_card.visible = False
+        set_busy(True)
+
+        def worker():
+            try:
+                task()
+            except Exception as ex:
+                show_error(f"Falha: {ex}")
+                stage.value = "Erro."
+                pct.value = ""
+                notify("Falha na operação.", ok=False)
+            finally:
+                set_busy(False)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def cancelled():
+        stage.value = "Operação cancelada: nenhum arquivo foi alterado."
+        pct.value = ""
+
+    # carregar o .bin assim que for escolhido (uma vez; as abas reutilizam)
+    def load_task():
+        path = state["path"]
+        state["log"] = None
+        label = "Lendo, decodificando e verificando o log..."
+        show(0.0, label)
+        try:
+            log = pipeline.load_log(path, lambda p: show(p, label))
+        except Exception:
+            drop_zone.border = ft.border.all(1.5, THEME["err"])
+            raise
+        state["log"] = log
+        show_quality(log.quality)
+        n = len(log.segments)
+        extra = f"  ·  {n} segmentos" if n > 1 else ""
+        show(1.0, f"Log carregado: {log.result.total_packets:,} pacotes{extra}.".replace(",", "."))
+
+    def on_pick(e: ft.FilePickerResultEvent):
+        if not e.files:
+            return
+        path = e.files[0].path
+        state["path"] = path
+        drop_icon.name = ft.Icons.DESCRIPTION_ROUNDED
+        drop_icon.color = THEME["ok"]
+        drop_title.value = os.path.basename(path)
+        try:
+            size = fmt_size(os.path.getsize(path))
+        except OSError:
+            size = "tamanho desconhecido"
+        drop_hint.value = f"{size}  ·  clique para trocar o arquivo"
+        drop_zone.border = ft.border.all(1.5, THEME["ok"])
+        result_card.visible = False
+        csv_result_card.visible = False
+        quality_card.visible = False
+        run_task(load_task)
+
+    picker = ft.FilePicker(on_result=on_pick)
+    page.overlay.append(picker)
+    drop_zone.on_click = lambda _: picker.pick_files(
+        allowed_extensions=["bin"], dialog_title="Selecione o log .bin")
+
+    def convert_task():
+        log = state["log"]
+        t_start = time.time()
+        outs = pipeline.ld_paths(log)
+        existing = [o for o in outs if os.path.exists(o)]
+        if existing and not confirm_overwrite(existing):
+            return cancelled()
+        label = "Reamostrando canais e gerando o .ld..."
+        show(0.0, label)
+        pipeline.write_ld_outputs(log, session_meta(), progress_cb=lambda p: show(p, label))
+
+        segments = log.segments
+        state["out"] = outs[0]
+        v_packets.value = f"{sum(s.total_packets for s in segments):,}".replace(",", ".")
+        v_channels.value = str(len({ch.name for seg in segments for g in seg.groups.values()
+                                    for ch in g.definition.channels}))
+        v_duration.value = fmt_duration(sum(log_duration_s(s) for s in segments))
+        v_time.value = f"{time.time() - t_start:.1f} s"
+        out_path.value = "\n".join(outs)
+        if len(outs) > 1:
+            out_path.value = f"{len(outs)} segmentos (saltos/resets de timestamp):\n" + out_path.value
+        warn_text.value = "Avisos do parser: " + " | ".join(log.result.warnings)
+        warn_text.visible = bool(log.result.warnings)
+        result_card.visible = True
+        show(1.0, "Concluído.")
+        notify("Conversão concluída!", ok=True)
+
+    def csv_task():
+        log, opts = state["log"], csv_options()
+        outs = pipeline.csv_paths(log, opts)
+        existing = [o for o in outs if os.path.exists(o)]
+        if existing and not confirm_overwrite(existing):
+            return cancelled()
+        label = "Gerando CSV..."
+        show(0.0, label)
+        written = pipeline.write_csv_outputs(log, session_meta(), opts,
+                                             progress_cb=lambda p: show(p, label))
+        state["out"] = written[0]
+        csv_result.value = "\n".join(written)
+        csv_result_card.visible = True
+        show(1.0, "CSV exportado.")
+        notify("CSV exportado!", ok=True)
+
+    def batch_task():
+        if not (batch_ld.value or batch_csv.value):
+            raise ValueError("Escolha ao menos uma saída (.ld ou CSV).")
+        batch_list.controls = []
+        batch_summary_text.value = ""
+
+        def prog(i, n, f):
+            show(i / n if n else 1.0,
+                 f"Lote: {i + 1}/{n}  ·  {os.path.basename(f)}" if f else "Lote concluído.")
+
+        items = pipeline.convert_folder(
+            state["batch_dir"], session_meta(), ld=batch_ld.value, csv=batch_csv.value,
+            csv_options=csv_options(), overwrite=batch_overwrite.value, progress_cb=prog)
+        colors = {"ok": THEME["ok"], "pulado": THEME["warn"], "erro": THEME["err"]}
+        batch_summary_text.value = pipeline.batch_summary(items)
+        batch_list.controls = [ft.Text(line, size=12, color=colors[it.status], selectable=True)
+                               for it, line in zip(items, batch_lines(items))]
+        if items:
+            state["out"] = items[0].source
+        show(1.0, "Lote concluído.")
+        notify(batch_summary_text.value, ok=all(it.status != "erro" for it in items))
+
+    def on_dir(e: ft.FilePickerResultEvent):
+        if not e.path:
+            return
+        state["batch_dir"] = e.path
+        n = len(pipeline.list_bins(e.path))
+        batch_folder.value = f"{e.path}  ·  {n} arquivo(s) .bin"
+        refresh_buttons()
         page.update()
 
-    def run_conversion():
-        src = state["path"]
-        t_start = time.time()
+    dir_picker = ft.FilePicker(on_result=on_dir)
+    page.overlay.append(dir_picker)
+    batch_pick_btn.on_click = lambda _: dir_picker.get_directory_path(
+        dialog_title="Pasta com os logs .bin")
 
-        def show(p: float, label: str):
-            bar.value = p
-            pct.value = f"{int(p * 100)}%"
-            stage.value = label
-            page.update()
+    def guarded(task, btn):
+        def handler(_):
+            if not btn.disabled and not state["busy"]:
+                run_task(task)
+        return handler
 
-        try:
-            show(0.0, "Lendo e decodificando pacotes...")
-            result = parse_file(src, lambda p: show(p * 0.6, "Lendo e decodificando pacotes..."))
-            require_data(result)
-
-            show(0.6, "Verificando timestamps e qualidade do log...")
-            check = check_timestamps(result)
-            show_quality(build_quality_report(result, check))
-            segments = check.segments
-            outs = segment_paths(os.path.splitext(src)[0] + ".ld", len(segments))
-            existing = [o for o in outs if os.path.exists(o)]
-            if existing and not confirm_overwrite(existing):
-                stage.value = "Conversão cancelada: nenhum arquivo foi alterado."
-                pct.value = ""
-                set_busy(False)
-                return
-
-            label = "Reamostrando canais e gerando o .ld..."
-            for i, (seg, out) in enumerate(zip(segments, outs)):
-                write_ld(seg, out, driver.value, vehicle.value, venue.value,
-                         event.value, session.value,
-                         progress_cb=lambda p, i=i: show(
-                             0.65 + (i + p) / len(segments) * 0.35, label))
-
-            state["out"] = outs[0]
-            n_channels = len({ch.name for seg in segments for g in seg.groups.values()
-                              for ch in g.definition.channels})
-            v_packets.value = f"{sum(s.total_packets for s in segments):,}".replace(",", ".")
-            v_channels.value = str(n_channels)
-            v_duration.value = fmt_duration(sum(log_duration_s(s) for s in segments))
-            v_time.value = f"{time.time() - t_start:.1f} s"
-            out_path.value = "\n".join(outs)
-            if len(outs) > 1:
-                out_path.value = (f"{len(outs)} segmentos (saltos/resets de timestamp):\n"
-                                  + out_path.value)
-            if result.warnings:
-                warn_text.value = "Avisos do parser: " + " | ".join(result.warnings)
-                warn_text.visible = True
-            else:
-                warn_text.visible = False
-            result_card.visible = True
-            error_card.visible = False
-            show(1.0, "Concluído.")
-            set_busy(False)
-            notify("Conversão concluída!", ok=True)
-        except Exception as ex:  # a GUI nunca deve travar
-            error_text.value = f"Falha na conversão: {ex}"
-            error_card.visible = True
-            result_card.visible = False
-            stage.value = "Erro na conversão."
-            pct.value = ""
-            set_busy(False)
-            notify("Falha na conversão.", ok=False)
-
-    def on_convert(_):
-        if convert_btn.disabled or state["path"] is None:
-            return
-        result_card.visible = False
-        error_card.visible = False
-        quality_card.visible = False
-        set_busy(True)
-        threading.Thread(target=run_conversion, daemon=True).start()
-
-    convert_btn.on_click = on_convert
+    convert_btn.on_click = guarded(convert_task, convert_btn)
+    csv_btn.on_click = guarded(csv_task, csv_btn)
+    batch_btn.on_click = guarded(batch_task, batch_btn)
 
     # ---- montagem --------------------------------------------------------
     page.add(
@@ -479,13 +685,16 @@ def main(page: ft.Page):
             ft.Row(spacing=10, controls=[driver, vehicle, venue]),
             ft.Row(spacing=10, controls=[event, session]),
         ])),
-        section_card("3", "Converter", ft.Column(spacing=14,
-                                                 controls=[convert_btn, progress_box])),
-        quality_card, result_card, error_card,
+        progress_box,
+        quality_card, error_card,
+        tab_bar,
+        tab_converter, tab_csv,
         ft.Container(height=4),
         ft.Text("Formula Route UFSCar  ·  Route Telemetry Converter",
                 size=11, color=THEME["muted"], text_align=ft.TextAlign.CENTER),
     )
+    refresh_buttons()
+    select_tab("Converter")
 
 
 if __name__ == "__main__":

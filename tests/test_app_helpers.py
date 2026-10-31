@@ -4,7 +4,8 @@ import pytest
 
 pytest.importorskip("flet")                       # app.py importa flet no topo
 
-from app import fmt_duration, fmt_size, log_duration_s, quality_lines, rates_summary  # noqa: E402
+from app import (batch_lines, fmt_duration, fmt_size, log_duration_s, quality_lines,  # noqa: E402
+                 rates_summary)
 from builders import U32, packet, synthetic_log, zeros   # noqa: E402
 from parser import parse_bin                              # noqa: E402
 
@@ -62,3 +63,15 @@ def test_rates_summary_with_single_packet_group():
     from quality import build_quality_report
     rep = build_quality_report(parse_bin(packet(0x04, 0, *zeros(0x04))))
     assert rates_summary(rep) == "Motor_Lento: - / 10 Hz"
+
+
+def test_batch_lines_one_line_per_file_with_status():
+    from pipeline import BatchItem
+    items = [BatchItem("/x/a.bin", "ok", ["a.ld", "a_50Hz.csv"], "", 2),
+             BatchItem("/x/b.bin", "ok", ["b_seg1.ld", "b_seg2.ld"], "2 segmentos"),
+             BatchItem("/x/c.bin", "pulado", [], "já existe: c.ld"),
+             BatchItem("/x/d.bin", "erro", [], "Nenhum dado válido")]
+    assert batch_lines(items) == ["[OK] a.bin: 2 arquivo(s), 2 aviso(s)",
+                                  "[OK] b.bin: 2 arquivo(s) (2 segmentos)",
+                                  "[PULADO] c.bin: já existe: c.ld",
+                                  "[ERRO] d.bin: Nenhum dado válido"]
