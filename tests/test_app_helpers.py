@@ -4,8 +4,8 @@ import pytest
 
 pytest.importorskip("flet")                       # app.py importa flet no topo
 
-from app import (batch_lines, fmt_duration, fmt_size, log_duration_s, quality_lines,  # noqa: E402
-                 rates_summary)
+from app import (batch_lines, fmt_duration, fmt_kpi, fmt_size, kpi_table_rows,  # noqa: E402
+                 log_duration_s, quality_lines, rates_summary)
 from builders import U32, packet, synthetic_log, zeros   # noqa: E402
 from parser import parse_bin                              # noqa: E402
 
@@ -75,3 +75,20 @@ def test_batch_lines_one_line_per_file_with_status():
                                   "[OK] b.bin: 2 arquivo(s) (2 segmentos)",
                                   "[PULADO] c.bin: já existe: c.ld",
                                   "[ERRO] d.bin: Nenhum dado válido"]
+
+
+@pytest.mark.parametrize("v, text", [(None, "–"), (0.0, "0"), (1 / 3, "0.3333"), (12.345, "12.35"),
+                                     (8123.6, "8124"), (-1500.2, "-1500")])
+def test_fmt_kpi(v, text):
+    assert fmt_kpi(v) == text
+
+
+def test_kpi_table_rows_with_and_without_comparison():
+    from kpi import KPI, KpiResult
+    a = [("a", KpiResult([KPI("V", 100.0, "km/h", "sessao"), KPI("V", 90.0, "km/h", "L1")]))]
+    b = [("b", KpiResult([KPI("V", 110.0, "km/h", "sessao")]))]
+    assert kpi_table_rows(a) == [("V", "100", "km/h")]
+    assert kpi_table_rows(a, segment="L1") == [("V", "90", "km/h")]
+    assert kpi_table_rows(a, b) == [("V", "100", "km/h", "110", "10", "+10.0%")]
+    assert kpi_table_rows(a, b, "L1") == [("V", "90", "km/h", "–", "–", "–")]
+    assert kpi_table_rows([]) == []

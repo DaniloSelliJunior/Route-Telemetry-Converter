@@ -12,9 +12,12 @@ import sys
 import threading
 import time
 
+from json import loads as json_loads
+
 import flet as ft
 
 import csv_export
+import kpi
 import pipeline
 from parser import unwrap_timestamps
 
@@ -102,6 +105,31 @@ def batch_lines(items: list) -> list:
             line += f" ({it.message})" if it.status == "ok" else f": {it.message}"
         out.append(line)
     return out
+
+
+def fmt_kpi(v) -> str:
+    """Valor de KPI para a tabela: inteiro a partir de 1000, senão 4 algarismos."""
+    if v is None:
+        return "–"
+    return f"{v:.0f}" if abs(v) >= 1000 else f"{v:.4g}"
+
+
+def kpi_table_rows(sessions_a: list, sessions_b: list = None, segment: str = kpi.SESSION) -> list:
+    """Linhas da tabela de KPIs de um segmento (1º segmento de log de cada arquivo).
+
+    Sem comparação: (kpi, valor, unidade). Com: (kpi, valor A, unidade, valor B, delta, delta %).
+    """
+    from kpi.output import compare
+    if not sessions_a:
+        return []
+    if not sessions_b:
+        return [(k.nome, fmt_kpi(k.valor), k.unidade)
+                for k in sessions_a[0][1].kpis if k.segmento == segment]
+    rows = compare(sessions_a[:1], sessions_b[:1])
+    return [(r["kpi"], fmt_kpi(r["valor_a"]), r["unidade"], fmt_kpi(r["valor_b"]),
+             fmt_kpi(r["delta"]),
+             "–" if r["delta_pct"] is None else f"{r['delta_pct']:+.1f}%")
+            for r in rows if r["segmento"] == segment]
 
 
 def log_duration_s(result) -> float:
@@ -364,8 +392,13 @@ def main(page: ft.Page):
                 lambda _: state["out"] and open_folder(state["out"]))]),
         ]),
     )
+    include_derived = styled_checkbox(
+        "Incluir canais derivados no .ld (Balanço de freio, G combinado, Taxa do acelerador, "
+        "Distância, Acel. pela velocidade)", True)
     tab_converter = ft.Column(spacing=14, controls=[
-        section_card("3", "Converter para MoTeC .ld", convert_btn), result_card])
+        section_card("3", "Converter para MoTeC .ld", ft.Column(spacing=12, controls=[
+            include_derived, convert_btn])),
+        result_card])
 
     # ---- aba CSV ------------------------------------------------------------
     csv_mode = ft.RadioGroup(
@@ -437,8 +470,52 @@ def main(page: ft.Page):
         ])),
     ])
 
+    # ---- aba KPIs ---------------------------------------------------------
+    cfg_label = ft.Text("Limiares padrão (provisórios).", size=12, color=THEME["muted"],
+                        selectable=True)
+    marks_label = ft.Text("Sem marcações: KPIs só da sessão inteira.", size=12,
+                          color=THEME["muted"], selectable=True)
+    cmp_label = ft.Text("Sem comparação.", size=12, color=THEME["muted"], selectable=True)
+    cfg_pick_btn = outline_button("Escolher JSON", ft.Icons.TUNE_ROUNDED)
+    cfg_reset_btn = outline_button("Padrões", ft.Icons.RESTART_ALT_ROUNDED)
+    cfg_save_btn = outline_button("Salvar modelo", ft.Icons.SAVE_ALT_ROUNDED)
+    marks_pick_btn = outline_button("Escolher CSV", ft.Icons.FLAG_ROUNDED)
+    marks_clear_btn = outline_button("Limpar", ft.Icons.CLEAR_ROUNDED)
+    cmp_pick_btn = outline_button("Escolher .bin", ft.Icons.COMPARE_ARROWS_ROUNDED)
+    cmp_clear_btn = outline_button("Limpar", ft.Icons.CLEAR_ROUNDED)
+    kpi_btn = primary_button("Calcular KPIs", ft.Icons.INSIGHTS_ROUNDED)
+    kpi_export_btn = primary_button("Exportar KPIs (CSV + JSON)", ft.Icons.SAVE_ROUNDED)
+    kpi_segment = styled_dropdown("Segmento", [(kpi.SESSION, "Sessão inteira")], kpi.SESSION,
+                                  width=260)
+    kpi_table = ft.Column(spacing=0)
+    kpi_warn = ft.Column(spacing=2)
+    kpi_result = ft.Text("", size=12, color=THEME["muted"], selectable=True)
+    kpi_card = ft.Container(
+        visible=False, bgcolor=THEME["surface"], border=ft.border.all(1, THEME["border"]),
+        border_radius=16, padding=20,
+        content=ft.Column(spacing=12, controls=[
+            ft.Row(spacing=10, controls=[kpi_segment]), kpi_table, kpi_warn]))
+
+    def option_row(label: str, info: ft.Text, *buttons):
+        return ft.Column(spacing=4, controls=[
+            ft.Text(label, size=12, weight=ft.FontWeight.W_600, color=THEME["text"]),
+            ft.Row(spacing=8, wrap=True, controls=list(buttons)), info])
+
+    tab_kpis = ft.Column(spacing=14, controls=[
+        section_card("3", "KPIs", ft.Column(spacing=14, controls=[
+            option_row("Limiares", cfg_label, cfg_pick_btn, cfg_reset_btn, cfg_save_btn),
+            option_row("Marcações de voltas/trechos (nome,inicio_s,fim_s)", marks_label,
+                       marks_pick_btn, marks_clear_btn),
+            option_row("Comparar com outra sessão", cmp_label, cmp_pick_btn, cmp_clear_btn),
+            kpi_btn, kpi_export_btn, kpi_result,
+        ])),
+        kpi_card,
+    ])
+    state.update(config=kpi.merge_config(), config_path=None, marks=None, log_b=None,
+                 kpis=None, kpis_b=None)
+
     # ---- abas (seletor próprio: evita altura ilimitada do ft.Tabs numa página com rolagem)
-    tabs = {"Converter": tab_converter, "CSV": tab_csv}
+    tabs = {"Converter": tab_converter, "CSV": tab_csv, "KPIs": tab_kpis}
     tab_buttons = {}
 
     def select_tab(name: str):
@@ -467,6 +544,11 @@ def main(page: ft.Page):
         enable(convert_btn, loaded and not busy)
         enable(csv_btn, loaded and not busy)
         enable(batch_btn, state["batch_dir"] is not None and not busy)
+        enable(kpi_btn, loaded and not busy)
+        enable(kpi_export_btn, state.get("kpis") is not None and not busy)
+        for b in (cfg_pick_btn, cfg_reset_btn, cfg_save_btn, marks_pick_btn, marks_clear_btn,
+                  cmp_pick_btn, cmp_clear_btn):
+            b.disabled = busy
         drop_zone.disabled = busy
         batch_pick_btn.disabled = busy
 
@@ -550,6 +632,7 @@ def main(page: ft.Page):
     def load_task():
         path = state["path"]
         state["log"] = None
+        clear_kpis()
         label = "Lendo, decodificando e verificando o log..."
         show(0.0, label)
         try:
@@ -596,7 +679,8 @@ def main(page: ft.Page):
             return cancelled()
         label = "Reamostrando canais e gerando o .ld..."
         show(0.0, label)
-        pipeline.write_ld_outputs(log, session_meta(), progress_cb=lambda p: show(p, label))
+        pipeline.write_ld_outputs(log, session_meta(), progress_cb=lambda p: show(p, label),
+                                  include_derived=include_derived.value, config=state["config"])
 
         segments = log.segments
         state["out"] = outs[0]
@@ -642,7 +726,8 @@ def main(page: ft.Page):
 
         items = pipeline.convert_folder(
             state["batch_dir"], session_meta(), ld=batch_ld.value, csv=batch_csv.value,
-            csv_options=csv_options(), overwrite=batch_overwrite.value, progress_cb=prog)
+            csv_options=csv_options(), overwrite=batch_overwrite.value, progress_cb=prog,
+            include_derived=include_derived.value, config=state["config"])
         colors = {"ok": THEME["ok"], "pulado": THEME["warn"], "erro": THEME["err"]}
         batch_summary_text.value = pipeline.batch_summary(items)
         batch_list.controls = [ft.Text(line, size=12, color=colors[it.status], selectable=True)
@@ -672,6 +757,173 @@ def main(page: ft.Page):
                 run_task(task)
         return handler
 
+    # ---- KPIs ------------------------------------------------------------
+    def clear_kpis():
+        state["kpis"] = state["kpis_b"] = None
+        kpi_card.visible = False
+        kpi_result.value = ""
+
+    def render_kpis():
+        sessions = state["kpis"]
+        if not sessions:
+            return
+        res = sessions[0][1]
+        segs = [kpi.SESSION] + [m.nome for m in (state["marks"] or [])]
+        kpi_segment.options = [ft.dropdown.Option(key=s, text="Sessão inteira" if s == kpi.SESSION
+                                                  else s) for s in segs]
+        if kpi_segment.value not in segs:
+            kpi_segment.value = kpi.SESSION
+        rows = kpi_table_rows(sessions, state["kpis_b"], kpi_segment.value)
+        cmp = state["kpis_b"] is not None
+        heads = ["KPI", "A" if cmp else "Valor", "Unidade"] + (["B", "Δ (B − A)", "Δ %"] if cmp else [])
+        kpi_table.controls = [ft.DataTable(
+            heading_row_height=34, data_row_min_height=28, data_row_max_height=32,
+            column_spacing=18,
+            heading_text_style=ft.TextStyle(color=THEME["muted"], size=12,
+                                            weight=ft.FontWeight.W_600),
+            data_text_style=ft.TextStyle(color=THEME["text"], size=12),
+            columns=[ft.DataColumn(ft.Text(h), numeric=i not in (0, 2))
+                     for i, h in enumerate(heads)],
+            rows=[ft.DataRow(cells=[ft.DataCell(ft.Text(c, selectable=True)) for c in r])
+                  for r in rows])]
+        avisos = res.avisos + (state["kpis_b"][0][1].avisos if cmp else [])
+        kpi_warn.controls = [ft.Text(f"•  {a}", size=11, color=THEME["warn"], selectable=True)
+                             for a in avisos[:40]]
+        kpi_card.visible = True
+
+    kpi_segment.on_change = lambda _: (render_kpis(), page.update())
+
+    def kpi_task():
+        label = "Calculando KPIs..."
+        show(0.2, label)
+        state["kpis"] = pipeline.compute_log_kpis(state["log"], state["config"], state["marks"])
+        state["kpis_b"] = None
+        if state["log_b"] is not None:
+            show(0.6, label)
+            state["kpis_b"] = pipeline.compute_log_kpis(state["log_b"], state["config"],
+                                                        state["marks"])
+        n = sum(len(r.kpis) for _, r in state["kpis"])
+        kpi_result.value = f"{n} KPIs calculados" + (
+            f" ({len(state['kpis'])} segmentos de log)." if len(state["kpis"]) > 1 else ".")
+        render_kpis()
+        show(1.0, "KPIs calculados.")
+
+    def kpi_export_task():
+        log = state["log"]
+        outs = pipeline.kpi_paths(log)
+        if state["kpis_b"] is not None:
+            outs.append(pipeline.comparison_path(log, state["log_b"]))
+        existing = [o for o in outs if os.path.exists(o)]
+        if existing and not confirm_overwrite(existing):
+            return cancelled()
+        written = pipeline.write_kpi_outputs(log, session_meta(), state["kpis"], state["config"],
+                                             profile=csv_profile.value)
+        if state["kpis_b"] is not None:
+            written.append(pipeline.write_comparison(log, state["kpis"], state["log_b"],
+                                                     state["kpis_b"], profile=csv_profile.value))
+        state["out"] = written[0]
+        kpi_result.value = "Gravado:\n" + "\n".join(written)
+        show(1.0, "KPIs exportados.")
+        notify("KPIs exportados!", ok=True)
+
+    def on_cfg(e: ft.FilePickerResultEvent):
+        if not e.files:
+            return
+        path = e.files[0].path
+        try:
+            state["config"] = kpi.load_config(path)
+        except Exception as ex:
+            show_error(f"Limiares não carregados: {ex}")
+            page.update()
+            return
+        state["config_path"] = path
+        cfg_label.value = f"{path}  (provisórios até calibrar com logs reais)"
+        error_card.visible = False
+        clear_kpis()
+        refresh_buttons()
+        page.update()
+
+    def on_cfg_reset(_):
+        state["config"], state["config_path"] = kpi.merge_config(), None
+        cfg_label.value = "Limiares padrão (provisórios)."
+        clear_kpis()
+        refresh_buttons()
+        page.update()
+
+    def on_cfg_save(e: ft.FilePickerResultEvent):
+        if not e.path:
+            return
+        path = e.path if e.path.lower().endswith(".json") else e.path + ".json"
+        try:
+            csv_export.write_json(path, json_loads(kpi.config_json(state["config"])))
+            notify(f"Modelo de limiares salvo: {os.path.basename(path)}", ok=True)
+        except Exception as ex:
+            show_error(f"Falha ao salvar limiares: {ex}")
+            page.update()
+
+    def on_marks(e: ft.FilePickerResultEvent):
+        if not e.files:
+            return
+        path = e.files[0].path
+        try:
+            state["marks"] = kpi.load_segments(path)
+        except Exception as ex:
+            show_error(f"Marcações não carregadas: {ex}")
+            page.update()
+            return
+        marks_label.value = f"{path}  ·  {len(state['marks'])} segmento(s)"
+        error_card.visible = False
+        clear_kpis()
+        refresh_buttons()
+        page.update()
+
+    def on_marks_clear(_):
+        state["marks"] = None
+        marks_label.value = "Sem marcações: KPIs só da sessão inteira."
+        clear_kpis()
+        refresh_buttons()
+        page.update()
+
+    def on_cmp(e: ft.FilePickerResultEvent):
+        if not e.files:
+            return
+        path = e.files[0].path
+
+        def task():
+            show(0.0, "Lendo a sessão de comparação...")
+            state["log_b"] = pipeline.load_log(path, lambda p: show(p, "Lendo a sessão de comparação..."))
+            cmp_label.value = f"B = {os.path.basename(path)}  (A = arquivo principal)"
+            clear_kpis()
+            show(1.0, "Sessão de comparação carregada.")
+
+        run_task(task)
+
+    def on_cmp_clear(_):
+        state["log_b"] = None
+        cmp_label.value = "Sem comparação."
+        clear_kpis()
+        refresh_buttons()
+        page.update()
+
+    cfg_picker = ft.FilePicker(on_result=on_cfg)
+    cfg_saver = ft.FilePicker(on_result=on_cfg_save)
+    marks_picker = ft.FilePicker(on_result=on_marks)
+    cmp_picker = ft.FilePicker(on_result=on_cmp)
+    page.overlay.extend([cfg_picker, cfg_saver, marks_picker, cmp_picker])
+    cfg_pick_btn.on_click = lambda _: cfg_picker.pick_files(
+        allowed_extensions=["json"], dialog_title="Arquivo de limiares (.json)")
+    cfg_reset_btn.on_click = on_cfg_reset
+    cfg_save_btn.on_click = lambda _: cfg_saver.save_file(
+        dialog_title="Salvar limiares", file_name="limiares_kpi.json", allowed_extensions=["json"])
+    marks_pick_btn.on_click = lambda _: marks_picker.pick_files(
+        allowed_extensions=["csv"], dialog_title="Marcações (nome,inicio_s,fim_s)")
+    marks_clear_btn.on_click = on_marks_clear
+    cmp_pick_btn.on_click = lambda _: cmp_picker.pick_files(
+        allowed_extensions=["bin"], dialog_title="Sessão para comparar (.bin)")
+    cmp_clear_btn.on_click = on_cmp_clear
+    kpi_btn.on_click = guarded(kpi_task, kpi_btn)
+    kpi_export_btn.on_click = guarded(kpi_export_task, kpi_export_btn)
+
     convert_btn.on_click = guarded(convert_task, convert_btn)
     csv_btn.on_click = guarded(csv_task, csv_btn)
     batch_btn.on_click = guarded(batch_task, batch_btn)
@@ -688,7 +940,7 @@ def main(page: ft.Page):
         progress_box,
         quality_card, error_card,
         tab_bar,
-        tab_converter, tab_csv,
+        tab_converter, tab_csv, tab_kpis,
         ft.Container(height=4),
         ft.Text("Formula Route UFSCar  ·  Route Telemetry Converter",
                 size=11, color=THEME["muted"], text_align=ft.TextAlign.CENTER),

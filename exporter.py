@@ -95,6 +95,21 @@ def _build_channels(result: ParseResult, max_span_s: float = MAX_GRID_SPAN_S):
     return channels
 
 
+def resampled_channels(result: ParseResult):
+    """Canais na grade do .ld: ({nome: (t_s, valores)}, {nome: unidade}, {nome: freq_hz}).
+
+    t_s em segundos desde o 1º pacote do arquivo (mesma origem do .ld e do CSV).
+    Entrada dos canais derivados e dos KPIs.
+    """
+    require_data(result)
+    data, units, freqs = {}, {}, {}
+    for name, unit, freq, values in _build_channels(result):
+        data[name] = (np.arange(values.size) / freq, values)
+        units[name] = unit
+        freqs[name] = freq
+    return data, units, freqs
+
+
 def write_csv(result: ParseResult, path: str):
     """CSV de apoio/depuração: um canal por linha (cada um na sua frequência)."""
     require_data(result)
@@ -110,9 +125,13 @@ def write_ld(result: ParseResult, path: str, driver="Piloto Route",
              vehicle="FR2026", venue="UFSCar", event="", session="",
              comment="Convertido do .bin",
              progress_cb: Optional[Callable[[float], None]] = None,
-             log_datetime: Optional[datetime.datetime] = None):
+             log_datetime: Optional[datetime.datetime] = None,
+             extra_channels: Optional[list] = None):
     """Grava o .ld. A data/hora do cabeçalho é `log_datetime`; sem ela, a data de
-    modificação do .bin (result.source_mtime) e, em último caso, a hora atual."""
+    modificação do .bin (result.source_mtime) e, em último caso, a hora atual.
+
+    extra_channels: [(nome, unidade, freq_hz, array)] gravados depois dos canais
+    do log (canais derivados)."""
     require_data(result)
 
     from motec_log import MotecLog
@@ -159,7 +178,7 @@ def write_ld(result: ParseResult, path: str, driver="Piloto Route",
         log.datetime = log_datetime
     log.initialize()
 
-    channels = _build_channels(result)
+    channels = _build_channels(result) + list(extra_channels or [])
     if progress_cb:
         progress_cb(0.5)
     for i, (name, unit, freq, data) in enumerate(channels):

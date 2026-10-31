@@ -10,7 +10,10 @@ from dataclasses import asdict, dataclass, field
 from typing import Callable, Optional
 
 import csv_export
-from exporter import require_data, segment_paths, write_ld
+import kpi
+from derived import compute_derived
+from exporter import require_data, resampled_channels, segment_paths, write_ld
+from kpi import output as kpi_output
 from parser import ParseResult, TimeCheck, check_timestamps, parse_file
 from quality import build_quality_report
 
@@ -78,13 +81,35 @@ def csv_paths(log: LoadedLog, options: CsvOptions, out_dir: Optional[str] = None
     return [p for _, _, p in plan] + [csv_export.metadata_path(base)]
 
 
+def channel_set(segment: ParseResult, include_derived: bool = True, config: dict = None):
+    """(canais, unidades, taxas) reamostrados de um segmento, com os derivados se pedido."""
+    data, units, freqs = resampled_channels(segment)
+    if include_derived:
+        cfg = (config or kpi.merge_config())["derivados"]
+        d, u, f = compute_derived(data, units, freqs, cfg)
+        data.update(d)
+        units.update(u)
+        freqs.update(f)
+    return data, units, freqs
+
+
+def derived_ld_channels(segment: ParseResult, config: dict = None) -> list:
+    """[(nome, unidade, freq, array)] dos canais derivados, para write_ld(extra_channels=...)."""
+    data, units, freqs = resampled_channels(segment)
+    cfg = (config or kpi.merge_config())["derivados"]
+    d, u, f = compute_derived(data, units, freqs, cfg)
+    return [(n, u[n], f[n], v) for n, (_, v) in d.items()]
+
+
 def write_ld_outputs(log: LoadedLog, meta: SessionMeta, out_dir: Optional[str] = None,
-                     progress_cb: Optional[Callable[[float], None]] = None) -> list:
+                     progress_cb: Optional[Callable[[float], None]] = None,
+                     include_derived: bool = False, config: dict = None) -> list:
     outs = ld_paths(log, out_dir)
     n = len(outs)
     for i, (seg, out) in enumerate(zip(log.segments, outs)):
+        extra = derived_ld_channels(seg, config) if include_derived else None
         write_ld(seg, out, progress_cb=(lambda p, i=i: progress_cb((i + p) / n))
-                 if progress_cb else None, **meta.ld_kwargs())
+                 if progress_cb else None, extra_channels=extra, **meta.ld_kwargs())
     return outs
 
 
@@ -94,6 +119,54 @@ def write_csv_outputs(log: LoadedLog, meta: SessionMeta, options: CsvOptions,
     return csv_export.export_csv(
         log.segments, output_base(log.path, out_dir), options.mode, options.freq_hz,
         options.profile, metadata=asdict(meta), source=log.path, progress_cb=progress_cb)
+
+
+# ---- KPIs ----------------------------------------------------------------------
+
+def session_names(log: LoadedLog) -> list:
+    """Nome de cada segmento do log nas saídas de KPI: nome do .bin (ou nome_segN)."""
+    stem = os.path.splitext(os.path.basename(log.path))[0]
+    return [os.path.splitext(os.path.basename(p))[0]
+            for p in segment_paths(stem + ".x", len(log.segments))]
+
+
+def compute_log_kpis(log: LoadedLog, config: dict = None, marks: list = None) -> list:
+    """[(nome da sessão, KpiResult)], um por segmento do log (timestamps)."""
+    cfg = config or kpi.merge_config()
+    out = []
+    for name, seg in zip(session_names(log), log.segments):
+        data, units, _ = channel_set(seg, True, cfg)
+        out.append((name, kpi.compute_kpis(data, marks, cfg, units)))
+    return out
+
+
+def kpi_paths(log: LoadedLog, out_dir: Optional[str] = None) -> list:
+    base = output_base(log.path, out_dir)
+    return [base + "_kpis.csv", base + "_kpis.json"]
+
+
+def comparison_path(log_a: LoadedLog, log_b: LoadedLog, out_dir: Optional[str] = None) -> str:
+    stem_b = os.path.splitext(os.path.basename(log_b.path))[0]
+    return output_base(log_a.path, out_dir) + f"_vs_{stem_b}_comparacao.csv"
+
+
+def write_kpi_outputs(log: LoadedLog, meta: SessionMeta, sessions: list, config: dict = None,
+                      out_dir: Optional[str] = None, profile: str = "padrao") -> list:
+    """Grava <base>_kpis.csv e <base>_kpis.json a partir de compute_log_kpis."""
+    csv_path, json_path = kpi_paths(log, out_dir)
+    kpi_output.write_kpis_csv(csv_path, sessions, profile)
+    metadata = asdict(meta)
+    metadata["arquivo_origem"] = os.path.basename(log.path)
+    kpi_output.write_kpis_json(json_path, sessions, metadata, config or kpi.merge_config(),
+                               log.quality)
+    return [csv_path, json_path]
+
+
+def write_comparison(log_a: LoadedLog, sessions_a: list, log_b: LoadedLog, sessions_b: list,
+                     out_dir: Optional[str] = None, profile: str = "padrao") -> str:
+    path = comparison_path(log_a, log_b, out_dir)
+    kpi_output.write_comparison_csv(path, kpi_output.compare(sessions_a, sessions_b), profile)
+    return path
 
 
 @dataclass
@@ -113,7 +186,8 @@ def list_bins(folder: str) -> list:
 
 def convert_file(src: str, meta: SessionMeta, ld: bool = True, csv: bool = False,
                  csv_options: Optional[CsvOptions] = None, out_dir: Optional[str] = None,
-                 overwrite: bool = False) -> BatchItem:
+                 overwrite: bool = False, include_derived: bool = False,
+                 config: dict = None) -> BatchItem:
     """Converte um arquivo; nunca levanta exceção (o erro vai para o BatchItem)."""
     item = BatchItem(source=src)
     csv_options = csv_options or CsvOptions()
@@ -128,7 +202,7 @@ def convert_file(src: str, meta: SessionMeta, ld: bool = True, csv: bool = False
             item.message = "já existe: " + ", ".join(os.path.basename(p) for p in existing)
             return item
         if ld:
-            item.outputs += write_ld_outputs(log, meta, out_dir)
+            item.outputs += write_ld_outputs(log, meta, out_dir, None, include_derived, config)
         if csv:
             item.outputs += write_csv_outputs(log, meta, csv_options, out_dir)
         if len(log.segments) > 1:
@@ -142,7 +216,8 @@ def convert_file(src: str, meta: SessionMeta, ld: bool = True, csv: bool = False
 def convert_folder(folder: str, meta: SessionMeta, ld: bool = True, csv: bool = False,
                    csv_options: Optional[CsvOptions] = None, out_dir: Optional[str] = None,
                    overwrite: bool = False,
-                   progress_cb: Optional[Callable[[int, int, str], None]] = None) -> list:
+                   progress_cb: Optional[Callable[[int, int, str], None]] = None,
+                   include_derived: bool = False, config: dict = None) -> list:
     """Converte todos os .bin da pasta. progress_cb(i, total, arquivo) antes de cada um."""
     if not (ld or csv):
         raise ValueError("Escolha ao menos uma saída (.ld ou CSV).")
@@ -151,7 +226,8 @@ def convert_folder(folder: str, meta: SessionMeta, ld: bool = True, csv: bool = 
     for i, src in enumerate(files):
         if progress_cb:
             progress_cb(i, len(files), src)
-        items.append(convert_file(src, meta, ld, csv, csv_options, out_dir, overwrite))
+        items.append(convert_file(src, meta, ld, csv, csv_options, out_dir, overwrite,
+                                  include_derived, config))
     if progress_cb:
         progress_cb(len(files), len(files), "")
     return items
