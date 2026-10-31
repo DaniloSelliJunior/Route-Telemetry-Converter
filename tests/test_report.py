@@ -100,3 +100,9 @@ def test_dark_style_png_for_gui():
     c = report.build_charts(RES, style="dark", only=("gg",))[0]
     import base64
     assert base64.b64decode(report.figure_png_b64(c.figure))[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_custom_style_dict_is_accepted():
+    style = dict(report.STYLES["light"], bg="#F0F2F5")
+    c = report.build_charts(RES, style=style, only=("gg",))[0]
+    assert c.figure.get_facecolor()[:3] == pytest.approx((0xF0 / 255, 0xF2 / 255, 0xF5 / 255))

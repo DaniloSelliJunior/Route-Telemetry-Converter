@@ -35,6 +35,11 @@ STYLES = {
 }
 
 
+def _style(style) -> dict:
+    """Nome em STYLES ou um dict com as mesmas chaves (a GUI passa a paleta ativa)."""
+    return STYLES[style] if isinstance(style, str) else style
+
+
 def matplotlib_available() -> bool:
     try:
         import matplotlib  # noqa: F401
@@ -83,7 +88,7 @@ def _bar_width(n: int, series: int = 1) -> float:
 
 def fig_bars(title, ylabel, labels, a, b=None, label_a="A", label_b="B", style="light"):
     """Barras de uma série (sem legenda) ou duas lado a lado (com legenda)."""
-    st = STYLES[style]
+    st = _style(style)
     fig, (ax,) = _figure(st)
     x = np.arange(len(labels))
     if b is None:
@@ -106,7 +111,7 @@ def fig_braking(events: list, unit: str, style="light"):
 
     Dois painéis com eixo próprio, um embaixo do outro (nunca eixo duplo).
     """
-    st = STYLES[style]
+    st = _style(style)
     fig, (ax1, ax2) = _figure(st, h=4.6, rows=2)
     x = np.arange(1, len(events) + 1)
     ax1.bar(x, [e["pico_psi"] for e in events], width=_bar_width(len(events)), color=st["a"])
@@ -126,7 +131,7 @@ def fig_braking(events: list, unit: str, style="light"):
 
 def fig_gg(a: dict, b: dict = None, label_a="A", label_b="B", style="light"):
     """Dispersão g-g (lateral x longitudinal) com o círculo de referência."""
-    st = STYLES[style]
+    st = _style(style)
     fig, (ax,) = _figure(st, w=4.8, h=4.6)
     ax.grid(axis="x", color=st["grid"], linewidth=0.8)
     for pts, color, label in ((a, st["a"], label_a), (b, st["b"], label_b)):
@@ -151,7 +156,7 @@ def fig_gg(a: dict, b: dict = None, label_a="A", label_b="B", style="light"):
 
 def fig_oil(pts: dict, style="light"):
     """Pressão de óleo x RPM (acima da marcha lenta) com o mínimo de cada faixa."""
-    st = STYLES[style]
+    st = _style(style)
     fig, (ax,) = _figure(st)
     ax.scatter(pts["rpm"], pts["pressao"], s=6, alpha=0.4, color=st["a"], linewidths=0,
                rasterized=True)

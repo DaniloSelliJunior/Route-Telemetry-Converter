@@ -2,8 +2,13 @@
 
 Executar:  python app.py
 
-Identidade visual: ajuste a paleta no bloco THEME logo abaixo. Para exibir o
-logo da equipe, coloque o arquivo em  assets/logo.png  (fundo transparente).
+Identidade visual: as paletas (escuro e claro) ficam em theme.py; THEME abaixo
+é a paleta ativa. Para exibir o logo da equipe, coloque o arquivo em
+assets/logo.png (fundo transparente).
+
+A interface é montada por build(page, state). Trocar o tema reconstrói os
+controles (as cores são aplicadas na criação) sem reiniciar: o estado (log
+carregado, KPIs, campos, aba atual) fica em `state`, fora de build.
 """
 
 import os
@@ -21,25 +26,13 @@ import kpi
 import pipeline
 import report
 import report_data
+import settings as prefs
+from theme import PALETTES, THEME_CHOICES, on_color, resolve_theme
 from report_data import fmt_value as fmt_kpi
 from parser import unwrap_timestamps
 
-# ----------------------------------------------------------------------------
-# PALETA (valores provisórios: troque pelos hex oficiais da equipe)
-# ----------------------------------------------------------------------------
-THEME = {
-    "bg":        "#0C0E11",   # fundo da janela
-    "surface":   "#151920",   # cartões
-    "surface2":  "#1C212A",   # campos / blocos internos
-    "border":    "#272D38",
-    "primary":   "#E4002B",   # cor de destaque da equipe
-    "primary_d": "#9E001E",   # destaque escuro (gradiente/hover)
-    "text":      "#F2F4F7",
-    "muted":     "#8B95A5",
-    "ok":        "#34D17E",
-    "warn":      "#F5A524",
-    "err":       "#FF5C5C",
-}
+# paleta ativa (atualizada no lugar por apply_theme; as funções abaixo a leem na criação)
+THEME = dict(PALETTES["escuro"])
 TEAM_NAME = "FORMULA ROUTE"
 TEAM_SUB = "UFSCar  ·  Telemetria"
 
@@ -175,7 +168,7 @@ def section_card(step: str, title: str, content: ft.Control) -> ft.Container:
                             width=26, height=26, border_radius=13,
                             bgcolor=THEME["primary"], alignment=ft.alignment.center,
                             content=ft.Text(step, size=13, weight=ft.FontWeight.BOLD,
-                                            color="#FFFFFF"),
+                                            color=THEME["on_primary"]),
                         ),
                         ft.Text(title, size=15, weight=ft.FontWeight.W_600,
                                 color=THEME["text"]),
@@ -216,7 +209,7 @@ def styled_field(label: str, value: str, expand: bool = True) -> ft.TextField:
 def bar_chart(title: str, unit: str, labels: list, a: list, b: list = None,
               label_a: str = "A", label_b: str = "B") -> ft.Container:
     """Gráfico de barras nativo do Flet (tooltip por barra; legenda só com duas séries)."""
-    col_a, col_b = report.STYLES["dark"]["a"], report.STYLES["dark"]["b"]
+    col_a, col_b = report.STYLES[THEME["chart"]]["a"], report.STYLES[THEME["chart"]]["b"]
     width = 14 if b is None else 8
     top = max([v for v in list(a) + list(b or []) if v is not None] + [1e-9])
     groups = []
@@ -272,8 +265,8 @@ def primary_button(label: str, icon) -> ft.Container:
             colors=[THEME["primary"], THEME["primary_d"]]),
         content=ft.Row(
             alignment=ft.MainAxisAlignment.CENTER, spacing=10,
-            controls=[ft.Icon(icon, color="#FFFFFF"),
-                      ft.Text(label, size=15, weight=ft.FontWeight.BOLD, color="#FFFFFF")]),
+            controls=[ft.Icon(icon, color=THEME["on_primary"]),
+                      ft.Text(label, size=15, weight=ft.FontWeight.BOLD, color=THEME["on_primary"])]),
     )
 
 
@@ -293,20 +286,76 @@ def styled_checkbox(label: str, value: bool) -> ft.Checkbox:
 # ----------------------------------------------------------------------------
 # Aplicação
 # ----------------------------------------------------------------------------
+def apply_theme(page: ft.Page, state: dict):
+    """Ativa a paleta escolhida (Sistema segue o brilho do SO)."""
+    system_dark = page.platform_brightness == ft.Brightness.DARK
+    name = resolve_theme(state["settings"].tema, system_dark)
+    THEME.clear()
+    THEME.update(PALETTES[name])
+    page.theme_mode = ft.ThemeMode.DARK if name == "escuro" else ft.ThemeMode.LIGHT
+    page.theme = ft.Theme(color_scheme_seed=THEME["primary"])
+    page.dark_theme = ft.Theme(color_scheme_seed=THEME["primary"])
+    page.bgcolor = THEME["bg"]
+
+
+def initial_state() -> dict:
+    """Estado que sobrevive à reconstrução da interface. Preferências nunca travam o app."""
+    s, warnings = prefs.load_settings()
+    cfg, w = prefs.load_thresholds()
+    if w:
+        warnings.append(w)
+    return {
+        "settings": s, "startup_warnings": warnings,
+        # o .bin é lido uma vez só (pipeline.load_log) e reaproveitado pelas abas
+        "path": None, "log": None, "busy": False, "out": None, "batch_dir": None,
+        "config": cfg, "config_path": None, "marks": None, "marks_path": None,
+        "log_b": None, "kpis": None, "kpis_b": None, "tab": "Converter",
+        "form": {
+            "piloto": s.piloto, "veiculo": s.veiculo, "local": s.local, "evento": "", "sessao": "",
+            "include_derived": True, "csv_mode": s.csv_modo, "csv_rate": str(s.csv_taxa_hz),
+            "csv_profile": s.csv_perfil, "batch_ld": True, "batch_csv": False,
+            "batch_overwrite": False, "report_html": True, "report_pdf": True,
+            "thr_text": prefs.thresholds_text(),
+        },
+    }
+
+
 def main(page: ft.Page):
     page.title = "Route Telemetry Converter"
-    page.theme_mode = ft.ThemeMode.DARK
-    page.theme = ft.Theme(color_scheme_seed=THEME["primary"])
-    page.bgcolor = THEME["bg"]
     page.window_width = 820
     page.window_height = 880
     page.window_min_width = 680
     page.window_min_height = 720
     page.padding = ft.padding.symmetric(horizontal=28, vertical=22)
     page.scroll = ft.ScrollMode.AUTO
+    state = initial_state()
 
-    # estado compartilhado entre as abas: o .bin é lido uma vez só (pipeline.load_log)
-    state = {"path": None, "log": None, "busy": False, "out": None, "batch_dir": None}
+    def rebuild():
+        page.controls.clear()
+        page.overlay.clear()
+        apply_theme(page, state)
+        build(page, state, rebuild)
+
+    def on_brightness(_):
+        if state["settings"].tema == "sistema" and not state["busy"]:
+            state["save_form"]()
+            rebuild()
+
+    page.on_platform_brightness_change = on_brightness
+    apply_theme(page, state)
+    build(page, state, rebuild)
+    if state["startup_warnings"]:
+        page.snack_bar = ft.SnackBar(ft.Text(
+            f"Preferências: {len(state['startup_warnings'])} aviso(s); veja a aba Configurações.",
+            color=on_color(THEME["warn"])), bgcolor=THEME["warn"])
+        page.snack_bar.open = True
+        page.update()
+
+
+def build(page: ft.Page, state: dict, rebuild):
+    """Cria todos os controles com a paleta ativa e liga os eventos."""
+    form = state["form"]
+    out_dir = lambda: state["settings"].pasta_saida or None      # noqa: E731
 
     # ---- cabeçalho -------------------------------------------------------
     brand = []
@@ -367,11 +416,11 @@ def main(page: ft.Page):
     )
 
     # ---- 2. sessão (compartilhado: .ld e metadados do CSV) ----------------
-    driver = styled_field("Piloto", "Piloto Route")
-    vehicle = styled_field("Veículo", "FR2026")
-    venue = styled_field("Local", "UFSCar")
-    event = styled_field("Evento", "")
-    session = styled_field("Sessão", "")
+    driver = styled_field("Piloto", form["piloto"])
+    vehicle = styled_field("Veículo", form["veiculo"])
+    venue = styled_field("Local", form["local"])
+    event = styled_field("Evento", form["evento"])
+    session = styled_field("Sessão", form["sessao"])
 
     def session_meta() -> pipeline.SessionMeta:
         return pipeline.SessionMeta(driver.value, vehicle.value, venue.value,
@@ -449,7 +498,7 @@ def main(page: ft.Page):
     )
     include_derived = styled_checkbox(
         "Incluir canais derivados no .ld (Balanço de freio, G combinado, Taxa do acelerador, "
-        "Distância, Acel. pela velocidade)", True)
+        "Distância, Acel. pela velocidade)", form["include_derived"])
     tab_converter = ft.Column(spacing=14, controls=[
         section_card("3", "Converter para MoTeC .ld", ft.Column(spacing=12, controls=[
             include_derived, convert_btn])),
@@ -457,7 +506,7 @@ def main(page: ft.Page):
 
     # ---- aba CSV ------------------------------------------------------------
     csv_mode = ft.RadioGroup(
-        value="unificado",
+        value=form["csv_mode"],
         content=ft.Column(spacing=2, controls=[
             ft.Radio(value="unificado", label="Unificado: um CSV numa taxa só (interpolado)",
                      active_color=THEME["primary"],
@@ -467,9 +516,10 @@ def main(page: ft.Page):
                      label_style=ft.TextStyle(color=THEME["text"], size=13)),
         ]))
     csv_rate = styled_dropdown("Taxa (unificado)", [(str(r), f"{r} Hz") for r in csv_export.UNIFIED_RATES],
-                               str(csv_export.DEFAULT_RATE), width=170)
+                               form["csv_rate"], width=170)
     csv_profile = styled_dropdown("Perfil", [(k, p.label) for k, p in csv_export.PROFILES.items()],
-                                  "padrao", width=170)
+                                  form["csv_profile"], width=170)
+    csv_rate.disabled = form["csv_mode"] != "unificado"
     csv_btn = primary_button("Exportar CSV", ft.Icons.TABLE_CHART_ROUNDED)
     csv_result = ft.Text("", size=12, color=THEME["muted"], selectable=True)
     csv_result_card = ft.Container(
@@ -496,11 +546,13 @@ def main(page: ft.Page):
     csv_mode.on_change = on_mode_change
 
     # lote (pasta inteira): usa as opções de CSV acima e os dados da sessão
-    batch_folder = ft.Text("Nenhuma pasta escolhida.", size=12, color=THEME["muted"],
-                           selectable=True)
-    batch_ld = styled_checkbox(".ld (MoTeC)", True)
-    batch_csv = styled_checkbox("CSV (opções acima)", False)
-    batch_overwrite = styled_checkbox("Sobrescrever arquivos existentes", False)
+    batch_folder = ft.Text(
+        "Nenhuma pasta escolhida." if not state["batch_dir"] else
+        f"{state['batch_dir']}  ·  {len(pipeline.list_bins(state['batch_dir']))} arquivo(s) .bin",
+        size=12, color=THEME["muted"], selectable=True)
+    batch_ld = styled_checkbox(".ld (MoTeC)", form["batch_ld"])
+    batch_csv = styled_checkbox("CSV (opções acima)", form["batch_csv"])
+    batch_overwrite = styled_checkbox("Sobrescrever arquivos existentes", form["batch_overwrite"])
     batch_btn = primary_button("Converter pasta", ft.Icons.DRIVE_FOLDER_UPLOAD_ROUNDED)
     batch_pick_btn = outline_button("Escolher pasta", ft.Icons.FOLDER_ROUNDED)
     batch_summary_text = ft.Text("", size=13, weight=ft.FontWeight.W_600, color=THEME["text"])
@@ -526,13 +578,22 @@ def main(page: ft.Page):
     ])
 
     # ---- aba KPIs ---------------------------------------------------------
-    cfg_label = ft.Text("Limiares padrão (provisórios).", size=12, color=THEME["muted"],
-                        selectable=True)
-    marks_label = ft.Text("Sem marcações: KPIs só da sessão inteira.", size=12,
-                          color=THEME["muted"], selectable=True)
-    cmp_label = ft.Text("Sem comparação.", size=12, color=THEME["muted"], selectable=True)
+    settings_cfg_text = (f"Limiares das Configurações ({prefs.thresholds_path()}); "
+                         f"provisórios até calibrar com logs reais.")
+    cfg_label = ft.Text(
+        settings_cfg_text if not state["config_path"] else
+        f"{state['config_path']}  (provisórios até calibrar com logs reais)",
+        size=12, color=THEME["muted"], selectable=True)
+    marks_label = ft.Text(
+        "Sem marcações: KPIs só da sessão inteira." if not state["marks"] else
+        f"{state['marks_path']}  ·  {len(state['marks'])} segmento(s)",
+        size=12, color=THEME["muted"], selectable=True)
+    cmp_label = ft.Text(
+        "Sem comparação." if not state["log_b"] else
+        f"B = {os.path.basename(state['log_b'].path)}  (A = arquivo principal)",
+        size=12, color=THEME["muted"], selectable=True)
     cfg_pick_btn = outline_button("Escolher JSON", ft.Icons.TUNE_ROUNDED)
-    cfg_reset_btn = outline_button("Padrões", ft.Icons.RESTART_ALT_ROUNDED)
+    cfg_reset_btn = outline_button("Usar os das Configurações", ft.Icons.RESTART_ALT_ROUNDED)
     cfg_save_btn = outline_button("Salvar modelo", ft.Icons.SAVE_ALT_ROUNDED)
     marks_pick_btn = outline_button("Escolher CSV", ft.Icons.FLAG_ROUNDED)
     marks_clear_btn = outline_button("Limpar", ft.Icons.CLEAR_ROUNDED)
@@ -544,8 +605,8 @@ def main(page: ft.Page):
                                   width=260)
     kpi_table = ft.Column(spacing=0)
     kpi_charts = ft.Column(spacing=12)
-    report_html = styled_checkbox("HTML", True)
-    report_pdf = styled_checkbox("PDF", True)
+    report_html = styled_checkbox("HTML", form["report_html"])
+    report_pdf = styled_checkbox("PDF", form["report_pdf"])
     report_btn = primary_button("Gerar relatório", ft.Icons.DESCRIPTION_ROUNDED)
     report_hint = ft.Text(
         "" if report.matplotlib_available() else
@@ -578,18 +639,76 @@ def main(page: ft.Page):
         ])),
         kpi_card,
     ])
-    state.update(config=kpi.merge_config(), config_path=None, marks=None, log_b=None,
-                 kpis=None, kpis_b=None)
+
+    # ---- aba Configurações ------------------------------------------------
+    st_ = state["settings"]
+    theme_group = ft.RadioGroup(value=st_.tema, content=ft.Row(spacing=18, controls=[
+        ft.Radio(value=k, label=v, active_color=THEME["primary"],
+                 label_style=ft.TextStyle(color=THEME["text"], size=13))
+        for k, v in THEME_CHOICES.items()]))
+    def_driver = styled_field("Piloto", st_.piloto)
+    def_vehicle = styled_field("Veículo", st_.veiculo)
+    def_venue = styled_field("Local", st_.local)
+    def_mode = styled_dropdown("Modo do CSV", [("unificado", "Unificado"), ("grupos", "Por grupo")],
+                               st_.csv_modo, width=170)
+    def_rate = styled_dropdown("Taxa padrão", [(str(r), f"{r} Hz") for r in csv_export.UNIFIED_RATES],
+                               str(st_.csv_taxa_hz), width=170)
+    def_profile = styled_dropdown("Perfil de CSV", [(k, p.label) for k, p in csv_export.PROFILES.items()],
+                                  st_.csv_perfil, width=170)
+    out_label = ft.Text(st_.pasta_saida or "Ao lado do .bin (padrão).", size=12,
+                        color=THEME["muted"], selectable=True)
+    out_pick_btn = outline_button("Escolher pasta", ft.Icons.FOLDER_ROUNDED)
+    out_clear_btn = outline_button("Ao lado do .bin", ft.Icons.CLEAR_ROUNDED)
+    prefs_save_btn = primary_button("Salvar preferências", ft.Icons.SAVE_ROUNDED)
+    thr_editor = ft.TextField(
+        value=form["thr_text"], multiline=True, min_lines=12, max_lines=22,
+        bgcolor=THEME["surface2"], border_color=THEME["border"],
+        focused_border_color=THEME["primary"], border_radius=10, color=THEME["text"],
+        text_style=ft.TextStyle(font_family="monospace", size=12), cursor_color=THEME["primary"])
+    thr_save_btn = outline_button("Validar e salvar limiares", ft.Icons.CHECK_ROUNDED)
+    thr_reset_btn = outline_button("Restaurar padrões", ft.Icons.RESTART_ALT_ROUNDED)
+    settings_status = ft.Column(spacing=2, controls=[
+        ft.Text(f"•  {w}", size=11, color=THEME["warn"], selectable=True)
+        for w in state["startup_warnings"]])
+    tab_settings = ft.Column(spacing=14, controls=[
+        section_card("3", "Aparência", ft.Column(spacing=6, controls=[
+            theme_group,
+            ft.Text("A troca vale na hora. \"Sistema\" segue o tema claro/escuro do sistema "
+                    "operacional.", size=11, color=THEME["muted"])])),
+        section_card("4", "Valores padrão", ft.Column(spacing=12, controls=[
+            ft.Text("Sessão (preenchidos ao abrir o app)", size=12, weight=ft.FontWeight.W_600,
+                    color=THEME["text"]),
+            ft.Row(spacing=10, controls=[def_driver, def_vehicle, def_venue]),
+            ft.Text("CSV", size=12, weight=ft.FontWeight.W_600, color=THEME["text"]),
+            ft.Row(spacing=10, wrap=True, controls=[def_mode, def_rate, def_profile]),
+            ft.Text("Pasta de saída (.ld, CSV, KPIs, relatório e lote)", size=12,
+                    weight=ft.FontWeight.W_600, color=THEME["text"]),
+            ft.Row(spacing=8, wrap=True, controls=[out_pick_btn, out_clear_btn]), out_label,
+            prefs_save_btn,
+        ])),
+        section_card("5", "Limiares dos KPIs (JSON, provisórios)", ft.Column(spacing=10, controls=[
+            ft.Text(f"Arquivo: {prefs.thresholds_path()}. Só as chaves que mudam são necessárias; "
+                    f"chaves com \"_\" são comentários.", size=11, color=THEME["muted"],
+                    selectable=True),
+            thr_editor,
+            ft.Row(spacing=8, wrap=True, controls=[thr_save_btn, thr_reset_btn]),
+        ])),
+        settings_status,
+        ft.Text(f"Preferências em {prefs.config_dir() / prefs.SETTINGS_FILE}", size=11,
+                color=THEME["muted"], selectable=True),
+    ])
 
     # ---- abas (seletor próprio: evita altura ilimitada do ft.Tabs numa página com rolagem)
-    tabs = {"Converter": tab_converter, "CSV": tab_csv, "KPIs": tab_kpis}
+    tabs = {"Converter": tab_converter, "CSV": tab_csv, "KPIs": tab_kpis,
+            "Configurações": tab_settings}
     tab_buttons = {}
 
     def select_tab(name: str):
+        state["tab"] = name
         for n, btn in tab_buttons.items():
             sel = n == name
             btn.bgcolor = THEME["primary"] if sel else THEME["surface2"]
-            btn.content.color = "#FFFFFF" if sel else THEME["muted"]
+            btn.content.color = THEME["on_primary"] if sel else THEME["muted"]
             tabs[n].visible = sel
         page.update()
 
@@ -616,8 +735,10 @@ def main(page: ft.Page):
         enable(report_btn, state.get("kpis") is not None and not busy
                and report.matplotlib_available())
         for b in (cfg_pick_btn, cfg_reset_btn, cfg_save_btn, marks_pick_btn, marks_clear_btn,
-                  cmp_pick_btn, cmp_clear_btn):
+                  cmp_pick_btn, cmp_clear_btn, out_pick_btn, out_clear_btn, thr_save_btn,
+                  thr_reset_btn, theme_group):
             b.disabled = busy
+        enable(prefs_save_btn, not busy)
         drop_zone.disabled = busy
         batch_pick_btn.disabled = busy
 
@@ -628,9 +749,8 @@ def main(page: ft.Page):
         page.update()
 
     def notify(msg, ok=True):
-        page.snack_bar = ft.SnackBar(
-            ft.Text(msg, color="#FFFFFF"),
-            bgcolor=THEME["ok"] if ok else THEME["err"])
+        bg = THEME["ok"] if ok else THEME["err"]
+        page.snack_bar = ft.SnackBar(ft.Text(msg, color=on_color(bg)), bgcolor=bg)
         page.snack_bar.open = True
         page.update()
 
@@ -742,13 +862,13 @@ def main(page: ft.Page):
     def convert_task():
         log = state["log"]
         t_start = time.time()
-        outs = pipeline.ld_paths(log)
+        outs = pipeline.ld_paths(log, out_dir())
         existing = [o for o in outs if os.path.exists(o)]
         if existing and not confirm_overwrite(existing):
             return cancelled()
         label = "Reamostrando canais e gerando o .ld..."
         show(0.0, label)
-        pipeline.write_ld_outputs(log, session_meta(), progress_cb=lambda p: show(p, label),
+        pipeline.write_ld_outputs(log, session_meta(), out_dir(), lambda p: show(p, label),
                                   include_derived=include_derived.value, config=state["config"])
 
         segments = log.segments
@@ -769,13 +889,13 @@ def main(page: ft.Page):
 
     def csv_task():
         log, opts = state["log"], csv_options()
-        outs = pipeline.csv_paths(log, opts)
+        outs = pipeline.csv_paths(log, opts, out_dir())
         existing = [o for o in outs if os.path.exists(o)]
         if existing and not confirm_overwrite(existing):
             return cancelled()
         label = "Gerando CSV..."
         show(0.0, label)
-        written = pipeline.write_csv_outputs(log, session_meta(), opts,
+        written = pipeline.write_csv_outputs(log, session_meta(), opts, out_dir(),
                                              progress_cb=lambda p: show(p, label))
         state["out"] = written[0]
         csv_result.value = "\n".join(written)
@@ -795,7 +915,8 @@ def main(page: ft.Page):
 
         items = pipeline.convert_folder(
             state["batch_dir"], session_meta(), ld=batch_ld.value, csv=batch_csv.value,
-            csv_options=csv_options(), overwrite=batch_overwrite.value, progress_cb=prog,
+            csv_options=csv_options(), out_dir=out_dir(), overwrite=batch_overwrite.value,
+            progress_cb=prog,
             include_derived=include_derived.value, config=state["config"])
         colors = {"ok": THEME["ok"], "pulado": THEME["warn"], "erro": THEME["err"]}
         batch_summary_text.value = pipeline.batch_summary(items)
@@ -879,7 +1000,9 @@ def main(page: ft.Page):
             if series:
                 controls.append(bar_chart(title, unit, series[0], series[1], series[2], la, lb))
         if report.matplotlib_available():
-            for c in report.build_charts(res_a, res_b, la, lb, seg, style="dark",
+            style = dict(report.STYLES[THEME["chart"]], bg=THEME["surface2"], grid=THEME["border"],
+                         text=THEME["text"], muted=THEME["muted"])
+            for c in report.build_charts(res_a, res_b, la, lb, seg, style=style,
                                          only=("gg", "oleo")):
                 controls.append(ft.Container(
                     bgcolor=THEME["surface2"], border_radius=12, padding=8,
@@ -906,17 +1029,17 @@ def main(page: ft.Page):
 
     def kpi_export_task():
         log = state["log"]
-        outs = pipeline.kpi_paths(log)
+        outs = pipeline.kpi_paths(log, out_dir())
         if state["kpis_b"] is not None:
-            outs.append(pipeline.comparison_path(log, state["log_b"]))
+            outs.append(pipeline.comparison_path(log, state["log_b"], out_dir()))
         existing = [o for o in outs if os.path.exists(o)]
         if existing and not confirm_overwrite(existing):
             return cancelled()
         written = pipeline.write_kpi_outputs(log, session_meta(), state["kpis"], state["config"],
-                                             profile=csv_profile.value)
+                                             out_dir(), csv_profile.value)
         if state["kpis_b"] is not None:
             written.append(pipeline.write_comparison(log, state["kpis"], state["log_b"],
-                                                     state["kpis_b"], profile=csv_profile.value))
+                                                     state["kpis_b"], out_dir(), csv_profile.value))
         state["out"] = written[0]
         kpi_result.value = "Gravado:\n" + "\n".join(written)
         show(1.0, "KPIs exportados.")
@@ -940,8 +1063,9 @@ def main(page: ft.Page):
         page.update()
 
     def on_cfg_reset(_):
-        state["config"], state["config_path"] = kpi.merge_config(), None
-        cfg_label.value = "Limiares padrão (provisórios)."
+        cfg, warning = prefs.load_thresholds()
+        state["config"], state["config_path"] = cfg, None
+        cfg_label.value = settings_cfg_text if not warning else warning
         clear_kpis()
         refresh_buttons()
         page.update()
@@ -967,6 +1091,7 @@ def main(page: ft.Page):
             show_error(f"Marcações não carregadas: {ex}")
             page.update()
             return
+        state["marks_path"] = path
         marks_label.value = f"{path}  ·  {len(state['marks'])} segmento(s)"
         error_card.visible = False
         clear_kpis()
@@ -1022,13 +1147,13 @@ def main(page: ft.Page):
         if not formats:
             raise ValueError("Escolha HTML e/ou PDF.")
         log = state["log"]
-        outs = pipeline.report_paths(log, formats)
+        outs = pipeline.report_paths(log, formats, out_dir())
         existing = [o for o in outs if os.path.exists(o)]
         if existing and not confirm_overwrite(existing):
             return cancelled()
         show(0.3, "Gerando relatório...")
         written = pipeline.write_report(log, session_meta(), state["kpis"], state["log_b"],
-                                        state["kpis_b"], formats)
+                                        state["kpis_b"], formats, out_dir())
         state["out"] = written[0]
         kpi_result.value = "Relatório gravado:\n" + "\n".join(written)
         show(1.0, "Relatório gerado.")
@@ -1042,6 +1167,108 @@ def main(page: ft.Page):
     csv_btn.on_click = guarded(csv_task, csv_btn)
     batch_btn.on_click = guarded(batch_task, batch_btn)
 
+    # ---- Configurações ------------------------------------------------------
+    def save_form():
+        """Guarda os valores dos controles no estado (antes de reconstruir a interface)."""
+        form.update(
+            piloto=driver.value, veiculo=vehicle.value, local=venue.value, evento=event.value,
+            sessao=session.value, include_derived=include_derived.value, csv_mode=csv_mode.value,
+            csv_rate=csv_rate.value, csv_profile=csv_profile.value, batch_ld=batch_ld.value,
+            batch_csv=batch_csv.value, batch_overwrite=batch_overwrite.value,
+            report_html=report_html.value, report_pdf=report_pdf.value, thr_text=thr_editor.value)
+
+    state["save_form"] = save_form
+
+    def status(msg: str, ok: bool = True):
+        settings_status.controls = [ft.Text(f"•  {msg}", size=11, selectable=True,
+                                            color=THEME["ok"] if ok else THEME["err"])]
+
+    def on_theme(_):
+        if state["busy"]:
+            theme_group.value = state["settings"].tema
+            page.update()
+            return
+        state["settings"].tema = theme_group.value
+        err = prefs.save_settings(state["settings"])
+        save_form()
+        rebuild()
+        if err:
+            notify(err, ok=False)
+
+    theme_group.on_change = on_theme
+
+    def on_prefs_save(_):
+        if prefs_save_btn.disabled:
+            return
+        s = state["settings"]
+        candidate = dict(vars(s), piloto=def_driver.value or "", veiculo=def_vehicle.value or "",
+                         local=def_venue.value or "", csv_modo=def_mode.value,
+                         csv_taxa_hz=int(def_rate.value), csv_perfil=def_profile.value)
+        new, warnings = prefs.settings_from_dict(candidate)
+        if warnings:
+            status(" ".join(warnings), ok=False)
+            page.update()
+            return
+        state["settings"] = new
+        err = prefs.save_settings(new)
+        # aplica já: campos da sessão e opções da aba CSV
+        driver.value, vehicle.value, venue.value = new.piloto, new.veiculo, new.local
+        csv_mode.value, csv_rate.value, csv_profile.value = (new.csv_modo, str(new.csv_taxa_hz),
+                                                             new.csv_perfil)
+        csv_rate.disabled = new.csv_modo != "unificado"
+        status(err or "Preferências salvas e aplicadas.", ok=err is None)
+        page.update()
+
+    prefs_save_btn.on_click = on_prefs_save
+
+    def on_out_dir(e: ft.FilePickerResultEvent):
+        if not e.path:
+            return
+        state["settings"].pasta_saida = e.path
+        out_label.value = e.path
+        err = prefs.save_settings(state["settings"])
+        status(err or "Pasta de saída salva.", ok=err is None)
+        page.update()
+
+    def on_out_clear(_):
+        state["settings"].pasta_saida = ""
+        out_label.value = "Ao lado do .bin (padrão)."
+        err = prefs.save_settings(state["settings"])
+        status(err or "Saídas voltam a ficar ao lado do .bin.", ok=err is None)
+        page.update()
+
+    out_picker = ft.FilePicker(on_result=on_out_dir)
+    page.overlay.append(out_picker)
+    out_pick_btn.on_click = lambda _: out_picker.get_directory_path(dialog_title="Pasta de saída")
+    out_clear_btn.on_click = on_out_clear
+
+    def apply_thresholds(cfg):
+        state["config"], state["config_path"] = cfg, None
+        cfg_label.value = settings_cfg_text
+        clear_kpis()
+        refresh_buttons()
+
+    def on_thr_save(_):
+        try:
+            cfg = prefs.save_thresholds_text(thr_editor.value or "")
+        except ValueError as ex:
+            status(str(ex), ok=False)
+            page.update()
+            return
+        apply_thresholds(cfg)
+        status("Limiares validados, salvos e em uso nos KPIs.")
+        page.update()
+
+    def on_thr_reset(_):
+        cfg, text, err = prefs.reset_thresholds()
+        thr_editor.value = text
+        apply_thresholds(cfg)
+        status(err or "Limiares padrão restaurados.", ok=err is None)
+        page.update()
+
+    thr_save_btn.on_click = on_thr_save
+    thr_reset_btn.on_click = on_thr_reset
+
     # ---- montagem --------------------------------------------------------
     page.add(
         header, accent_bar,
@@ -1054,13 +1281,24 @@ def main(page: ft.Page):
         progress_box,
         quality_card, error_card,
         tab_bar,
-        tab_converter, tab_csv, tab_kpis,
+        tab_converter, tab_csv, tab_kpis, tab_settings,
         ft.Container(height=4),
         ft.Text("Formula Route UFSCar  ·  Route Telemetry Converter",
                 size=11, color=THEME["muted"], text_align=ft.TextAlign.CENTER),
     )
+    # reconstrução: reapresenta o que já estava carregado
+    if state["log"] is not None:
+        drop_icon.name = ft.Icons.DESCRIPTION_ROUNDED
+        drop_icon.color = THEME["ok"]
+        drop_title.value = os.path.basename(state["log"].path)
+        drop_hint.value = "Clique para trocar o arquivo"
+        drop_zone.border = ft.border.all(1.5, THEME["ok"])
+        show_quality(state["log"].quality)
+        stage.value = "Log carregado."
+    if state["kpis"]:
+        render_kpis()
     refresh_buttons()
-    select_tab("Converter")
+    select_tab(state["tab"])
 
 
 if __name__ == "__main__":
